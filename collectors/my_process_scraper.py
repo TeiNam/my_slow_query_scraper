@@ -15,11 +15,16 @@ from modules.mysql_connector import MySQLConnector
 from configs.mysql_conf import MySQLSettings
 from configs.mongo_conf import mongo_settings
 from configs.base_config import config
+from configs.scraper_conf import scraper_settings
 import logging
 
 logger = logging.getLogger(__name__)
 
-EXEC_TIME = 2
+# Get configuration values from scraper settings
+EXEC_TIME = scraper_settings['exec_time']
+EXCLUDED_DBS = scraper_settings['excluded_dbs']
+EXCLUDED_USERS = scraper_settings['excluded_users']
+MONITORING_INTERVAL = scraper_settings['monitoring_interval']
 
 
 @dataclass
@@ -91,12 +96,16 @@ class SlowQueryMonitor:
 
     async def query_mysql_instance(self) -> None:
         try:
-            sql_query = """
+            # SQL 쿼리에 설정값 적용
+            excluded_dbs = ','.join(f"'{db}'" for db in EXCLUDED_DBS)
+            excluded_users = ','.join(f"'{user}'" for user in EXCLUDED_USERS)
+
+            sql_query = f"""
                 SELECT `ID`, `DB`, `USER`, `HOST`, `TIME`, `INFO`
                 FROM `performance_schema`.`processlist`
                 WHERE info IS NOT NULL
-                AND DB not in ('information_schema', 'mysql', 'performance_schema')
-                AND USER not in ('monitor', 'rdsadmin', 'system user')
+                AND DB not in ({excluded_dbs})
+                AND USER not in ({excluded_users})
                 ORDER BY `TIME` DESC"""
 
             result = await self.mysql_connector.fetch_all(sql_query)
@@ -117,12 +126,10 @@ class SlowQueryMonitor:
         if time >= EXEC_TIME:
             existing_cache = self.pid_time_cache.get(pid)
 
-            # 새로운 캐시 데이터 생성
             new_cache = {
                 'max_time': max(existing_cache['max_time'], time) if existing_cache else time
             }
 
-            # 시작 시간은 처음 한 번만 설정
             if existing_cache and 'start' in existing_cache:
                 new_cache['start'] = existing_cache['start']
             else:
@@ -131,11 +138,9 @@ class SlowQueryMonitor:
                 utc_start_datetime = datetime.fromtimestamp(utc_start_timestamp, pytz.utc)
                 new_cache['start'] = utc_start_datetime
 
-            # SQL 텍스트 정리
             info_cleaned = re.sub(' +', ' ', info).encode('utf-8', 'ignore').decode('utf-8')
             info_cleaned = re.sub(r'[\n\t\r]+', ' ', info_cleaned).strip()
 
-            # QueryDetails 생성
             new_cache['details'] = QueryDetails(
                 instance=self.mysql_connector.instance_name,
                 db=db,
@@ -178,7 +183,8 @@ class SlowQueryMonitor:
 
             while not self._stop_event.is_set():
                 await self.query_mysql_instance()
-                await asyncio.sleep(1)
+                # 설정된 모니터링 간격 사용
+                await asyncio.sleep(MONITORING_INTERVAL)
 
         except asyncio.CancelledError:
             self.logger.info(f"Slow query monitoring task was cancelled for {self.mysql_connector.instance_name}")

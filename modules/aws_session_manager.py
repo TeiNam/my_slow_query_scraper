@@ -6,15 +6,17 @@ AWS Session Manager
 import boto3
 import botocore.config
 from typing import Optional, Dict, Any
-import subprocess
 import logging
 from configs.aws_session_conf import aws_session_config
-from botocore.exceptions import NoCredentialsError, ClientError
+from botocore.exceptions import NoCredentialsError, ClientError, ProfileNotFound
 
 logger = logging.getLogger(__name__)
 
 
 class AWSSessionManager:
+    """AWS Session Manager"""
+    DEFAULT_PROFILE = "AdministratorAccess-488659748805"
+
     def __init__(self):
         self.session: Optional[boto3.Session] = None
         self._initialize_session()
@@ -27,44 +29,38 @@ class AWSSessionManager:
                 self.session = boto3.Session(
                     region_name=aws_session_config.sso_settings.default_region
                 )
+                logger.info("Using EKS/EC2 IAM role")
             else:
-                # 로컬 환경에서는 SSO 사용
-                self._ensure_sso_login()
+                # 사용 가능한 프로파일 확인
+                available_profiles = boto3.Session().available_profiles
+                logger.info(f"Available AWS profiles: {', '.join(available_profiles)}")
+
+                # 로컬 환경에서는 지정된 프로파일 사용
                 self.session = boto3.Session(
+                    profile_name=self.DEFAULT_PROFILE,
                     region_name=aws_session_config.sso_settings.default_region
                 )
+                logger.info(f"Using AWS profile: {self.DEFAULT_PROFILE}")
 
             # 세션 유효성 검증
-            self.session.client('sts').get_caller_identity()
-            logger.info("AWS session initialized successfully")
+            identity = self.session.client('sts').get_caller_identity()
+            logger.info(f"AWS session initialized successfully (Account: {identity['Account']})")
 
+        except ProfileNotFound:
+            available_profiles = boto3.Session().available_profiles
+            error_msg = f"""
+                Profile '{self.DEFAULT_PROFILE}' not found
+                Available profiles: {', '.join(available_profiles)}
+                Please ensure you have the correct profile name or run 'aws sso login'
+                """
+            logger.error(error_msg)
+            raise
+        except (NoCredentialsError, ClientError) as e:
+            logger.error(f"AWS credentials not found or invalid. Please run 'aws sso login': {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to initialize AWS session: {e}")
             raise
-
-    @staticmethod
-    def _ensure_sso_login() -> None:
-        """SSO 로그인 상태 확인 및 필요시 로그인 수행"""
-        try:
-            # 현재 세션으로 권한 확인 시도
-            session = boto3.Session(
-                region_name=aws_session_config.sso_settings.default_region
-            )
-            session.client('sts').get_caller_identity()
-            logger.debug("Using existing SSO credentials")
-
-        except (NoCredentialsError, ClientError) as e:
-            # 권한 없음 - SSO 로그인 필요
-            logger.info(f"AWS SSO login required: {str(e)}")
-            try:
-                subprocess.run(
-                    ["aws", "sso", "login"],
-                    check=True
-                )
-                logger.info("AWS SSO login successful")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"AWS SSO login failed: {str(e)}")
-                raise
 
     def get_client(self, service_name: str, region: Optional[str] = None) -> Any:
         """AWS 서비스 클라이언트 반환"""
@@ -97,6 +93,9 @@ class AWSSessionManager:
             region_name=region or aws_session_config.sso_settings.default_region
         )
 
+
+# Export the class explicitly
+__all__ = ['AWSSessionManager']
 
 # Global instance
 aws_session = AWSSessionManager()

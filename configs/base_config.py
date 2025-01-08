@@ -6,7 +6,7 @@ Provides basic functionality for both local development (.env) and AWS environme
 import os
 import json
 import logging
-from pathlib import Path
+from base_path import get_project_root
 from typing import Dict, Any
 from dotenv import load_dotenv
 import boto3
@@ -20,7 +20,7 @@ class ConfigurationManager:
     def __init__(self):
         self._config: Dict[str, Any] = {}
 
-        # 우선 .env 파일 로드하여 APP_ENV 확인
+        # base_path를 사용하여 .env 파일 로드
         self._load_env_file()
         self._environment = os.getenv('APP_ENV', 'dev').lower()
 
@@ -42,7 +42,6 @@ class ConfigurationManager:
     def _load_aws_secrets(secret_name: str) -> Dict[str, Any]:
         """AWS Secrets Manager에서 시크릿 로드"""
         try:
-            # AWS 기본 리전 설정 사용
             region = os.getenv('AWS_DEFAULT_REGION', 'ap-northeast-2')
 
             session = boto3.Session()
@@ -62,15 +61,14 @@ class ConfigurationManager:
             logger.error(f"Failed to load AWS secrets: {str(e)}")
             return {}
 
-    @staticmethod
-    def _load_env_file() -> None:
+    def _load_env_file(self) -> None:
         """환경 설정을 위한 .env 파일 로드"""
-        env_path = Path('.env')
+        env_path = get_project_root() / '.env'
         if env_path.exists():
             load_dotenv(env_path, override=True)
-            logger.debug("Loaded .env file")
+            logger.debug(f"Loaded .env file from {env_path}")
         else:
-            logger.warning(".env file not found")
+            logger.warning(f".env file not found at {env_path}")
 
     def _init_config(self) -> None:
         """APP_ENV에 따른 설정 초기화"""
@@ -84,34 +82,16 @@ class ConfigurationManager:
             logger.info("Development environment: Using configuration from .env file")
 
     def get(self, key: str, default: Any = None) -> Any:
-        """설정값 조회
-
-        Args:
-            key: 설정 키
-            default: 기본값
-
-        Returns:
-            설정값 또는 기본값
-        """
-        # 환경변수에서 먼저 찾고, 없으면 config에서 찾음
+        """설정값 조회"""
         return os.getenv(key) or self._config.get(key, default)
 
     def __getattr__(self, name: str) -> Any:
-        """속성 스타일 접근 지원
-
-        Args:
-            name: 설정 키
-
-        Returns:
-            설정값
-
-        Raises:
-            AttributeError: 설정 키를 찾을 수 없는 경우
-        """
+        """속성 스타일 접근 지원"""
         value = self.get(name)
         if value is not None:
             return value
         raise AttributeError(f"Configuration has no attribute '{name}'")
+
 
 # Global configuration instance
 config = ConfigurationManager()
