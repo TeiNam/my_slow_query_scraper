@@ -1,55 +1,100 @@
-from pydantic_settings import BaseSettings
+"""
+Instance Loader
+Loads RDS instances from MongoDB with different filtering options
+"""
+
 from modules.mongodb_connector import MongoDBConnector
 from configs.mongo_conf import mongo_settings
 import logging
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
 
-class EnvSettings(BaseSettings):
-    ACCOUNT: str = ""
+class InstanceLoader:
+    """RDS 인스턴스 정보 로더"""
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    def __init__(self, account: Optional[str] = None):
+        self.account = account
+        self._realtime_instances_cache = None
+        self._all_instances_cache = None
+        self._cached_account = None
 
+    async def _clear_cache(self) -> None:
+        """캐시 초기화"""
+        self._realtime_instances_cache = None
+        self._all_instances_cache = None
+        self._cached_account = None
 
-env_settings = EnvSettings()
-
-cached_instances = None
-cached_account = None
-
-
-async def load_instances_from_mongodb():
-    global cached_instances, cached_account
-    current_account = env_settings.ACCOUNT
-
-    if cached_instances is None or cached_account != current_account:
+    @staticmethod
+    async def _load_instances_from_mongodb(query: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """MongoDB에서 인스턴스 정보 로드"""
         try:
             mongodb = await MongoDBConnector.get_database()
-            collection = mongodb[mongo_settings.MONGO_GET_SLOW_MYSQL_INSTANCE_COLLECTION]
-
-            # 계정 정보로 필터링
-            query = {} if not current_account else {"account": current_account}
+            collection = mongodb[mongo_settings.MONGO_RDS_INSTANCE_COLLECTION]
             instances = await collection.find(query).to_list(length=None)
-
-            cached_instances = []
-            for instance in instances:
-                processed_instance = {
-                    'instance_name': instance['instance_name'],
-                    'host': instance['host'],
-                    'port': instance['port'],
-                    'user': instance['user'],
-                    'password': instance['password'],
-                    'db': instance.get('db', ''),
-                    'account': instance.get('account', '')
-                }
-                cached_instances.append(processed_instance)
-
-            cached_account = current_account
-            logger.info(f"Loaded {len(cached_instances)} MySQL instances from MongoDB for account: {current_account}")
+            return instances
         except Exception as e:
             logger.error(f"Failed to load instances from MongoDB: {e}")
-            cached_instances = []
+            return []
 
-    return cached_instances
+    @staticmethod
+    def _process_instance(instance: Dict[str, Any]) -> Dict[str, Any]:
+        """인스턴스 정보 처리"""
+        return {
+            'instance_name': instance['DBInstanceIdentifier'],
+            'host': instance.get('Endpoint', {}).get('Address', ''),
+            'port': instance.get('Endpoint', {}).get('Port', 3306),
+            'tags': instance.get('Tags', {})
+        }
+
+    async def load_realtime_instances(self) -> List[Dict[str, Any]]:
+        """실시간 슬로우 쿼리 모니터링 대상 인스턴스 로드"""
+        if (self._realtime_instances_cache is None or
+            self._cached_account != self.account):
+
+            # 기본 쿼리 조건
+            query = {}
+            if self.account:
+                query["account"] = self.account
+
+            # real_time_slow_sql 태그가 true인 인스턴스만 필터링
+            instances = await self._load_instances_from_mongodb(query)
+            filtered_instances = []
+
+            for instance in instances:
+                processed = self._process_instance(instance)
+                if processed['tags'].get('real_time_slow_sql', '').lower() == 'true':
+                    filtered_instances.append(processed)
+
+            self._realtime_instances_cache = filtered_instances
+            self._cached_account = self.account
+            logger.info(f"Loaded {len(filtered_instances)} real-time monitoring instances")
+
+        return self._realtime_instances_cache
+
+    async def load_all_instances(self) -> List[Dict[str, Any]]:
+        """모든 RDS 인스턴스 로드"""
+        if (self._all_instances_cache is None or
+            self._cached_account != self.account):
+
+            query = {}
+            if self.account:
+                query["account"] = self.account
+
+            instances = await self._load_instances_from_mongodb(query)
+            processed_instances = [
+                self._process_instance(instance)
+                for instance in instances
+            ]
+
+            self._all_instances_cache = processed_instances
+            self._cached_account = self.account
+            logger.info(f"Loaded {len(processed_instances)} total instances")
+
+        return self._all_instances_cache
+
+    async def reload(self) -> None:
+        """캐시 강제 갱신"""
+        await self._clear_cache()
+        logger.info("Instance cache cleared")

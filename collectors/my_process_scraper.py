@@ -9,9 +9,9 @@ import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
-from threading import Lock
 from modules.mongodb_connector import mongodb
 from modules.mysql_connector import MySQLConnector
+from modules.load_instance import InstanceLoader
 from configs.mysql_conf import MySQLSettings
 from configs.mongo_conf import mongo_settings
 from configs.base_config import config
@@ -40,34 +40,13 @@ class QueryDetails:
     end: Optional[datetime] = None
 
 
-class ProcessListCache:
-    def __init__(self):
-        self._cache: Dict[int, Dict[str, Any]] = {}
-        self._lock = Lock()
-
-    def get(self, pid: int) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            return self._cache.get(pid)
-
-    def set(self, pid: int, data: Dict[str, Any]) -> None:
-        with self._lock:
-            self._cache[pid] = data
-
-    def pop(self, pid: int) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            return self._cache.pop(pid, None)
-
-    def keys(self):
-        with self._lock:
-            return list(self._cache.keys())
-
-
 class SlowQueryMonitor:
     def __init__(self, mysql_connector: MySQLConnector):
-        self.pid_time_cache = ProcessListCache()
+        self.pid_time_cache: Dict[int, Dict[str, Any]] = {}
         self.logger = logging.getLogger(__name__)
         self.mysql_connector = mysql_connector
         self._stop_event = asyncio.Event()
+        self.mongodb = None
         self.collection = None
 
     @staticmethod
@@ -76,9 +55,9 @@ class SlowQueryMonitor:
         settings = MySQLSettings(
             host=endpoint['Address'],
             port=endpoint['Port'],
-            user=config.get('MGMT_USER', 'mysql_mgmt'),
+            user=config.get('MGMT_USER', 'mgmt_mysql'),
             password=config.get('MGMT_USER_PASS'),
-            database='performance_schema'
+            database='performance_schema'  # performance_schema에서 변경
         )
 
         mysql_conn = MySQLConnector(instance_name)
@@ -96,7 +75,6 @@ class SlowQueryMonitor:
 
     async def query_mysql_instance(self) -> None:
         try:
-            # SQL 쿼리에 설정값 적용
             excluded_dbs = ','.join(f"'{db}'" for db in EXCLUDED_DBS)
             excluded_users = ','.join(f"'{user}'" for user in EXCLUDED_USERS)
 
@@ -108,11 +86,15 @@ class SlowQueryMonitor:
                 AND USER not in ({excluded_users})
                 ORDER BY `TIME` DESC"""
 
-            result = await self.mysql_connector.fetch_all(sql_query)
+            result = await self.mysql_connector.execute_query(sql_query)
 
             current_pids = set()
             for row in result:
-                await self.process_query_result(row, current_pids)
+                try:
+                    time_value = float(row['TIME'])
+                    await self.process_query_result(row, current_pids)
+                except (ValueError, TypeError) as e:
+                    self.logger.error(f"Failed to process TIME value: {row['TIME']}, Error: {e}")
 
             await self.handle_finished_queries(current_pids)
 
@@ -123,42 +105,46 @@ class SlowQueryMonitor:
         pid, db, user, host, time, info = row['ID'], row['DB'], row['USER'], row['HOST'], row['TIME'], row['INFO']
         current_pids.add(pid)
 
-        if time >= EXEC_TIME:
-            existing_cache = self.pid_time_cache.get(pid)
+        try:
+            time_value = float(time)
+            if time_value >= EXEC_TIME:
+                self.logger.info(f"[CACHE] Processing slow query - PID: {pid}, Time: {time_value}s")
 
-            new_cache = {
-                'max_time': max(existing_cache['max_time'], time) if existing_cache else time
-            }
+                # 단순화된 캐시 처리
+                cache_data = self.pid_time_cache.setdefault(pid, {'max_time': 0})
+                cache_data['max_time'] = max(cache_data['max_time'], time_value)
 
-            if existing_cache and 'start' in existing_cache:
-                new_cache['start'] = existing_cache['start']
-            else:
-                utc_now = datetime.now(pytz.utc)
-                utc_start_timestamp = int((utc_now - timedelta(seconds=EXEC_TIME)).timestamp())
-                utc_start_datetime = datetime.fromtimestamp(utc_start_timestamp, pytz.utc)
-                new_cache['start'] = utc_start_datetime
+                if 'start' not in cache_data:
+                    utc_now = datetime.now(pytz.utc)
+                    utc_start_timestamp = int((utc_now - timedelta(seconds=EXEC_TIME)).timestamp())
+                    utc_start_datetime = datetime.fromtimestamp(utc_start_timestamp, pytz.utc)
+                    cache_data['start'] = utc_start_datetime
 
-            info_cleaned = re.sub(' +', ' ', info).encode('utf-8', 'ignore').decode('utf-8')
-            info_cleaned = re.sub(r'[\n\t\r]+', ' ', info_cleaned).strip()
+                info_cleaned = re.sub(' +', ' ', info).encode('utf-8', 'ignore').decode('utf-8')
+                info_cleaned = re.sub(r'[\n\t\r]+', ' ', info_cleaned).strip()
 
-            new_cache['details'] = QueryDetails(
-                instance=self.mysql_connector.instance_name,
-                db=db,
-                pid=pid,
-                user=user,
-                host=host,
-                time=time,
-                sql_text=info_cleaned,
-                start=new_cache['start']
-            )
+                cache_data['details'] = QueryDetails(
+                    instance=self.mysql_connector.instance_name,
+                    db=db,
+                    pid=pid,
+                    user=user,
+                    host=host,
+                    time=time_value,
+                    sql_text=info_cleaned,
+                    start=cache_data['start']
+                )
 
-            self.pid_time_cache.set(pid, new_cache)
+                self.logger.info(
+                    f"[CACHE] Cached slow query - Instance: {self.mysql_connector.instance_name}, "
+                    f"PID: {pid}, DB: {db}, Time: {time_value}s"
+                )
+        except (ValueError, TypeError) as e:
+            self.logger.error(f"[ERROR] Failed to process query result - PID: {pid}, Time value: {time}, Error: {e}")
 
     async def handle_finished_queries(self, current_pids: set) -> None:
-        for pid in self.pid_time_cache.keys():
+        for pid, cache_data in list(self.pid_time_cache.items()):
             if pid not in current_pids:
-                cache_data = self.pid_time_cache.pop(pid)
-                if cache_data:
+                try:
                     data_to_insert = vars(cache_data['details'])
                     data_to_insert['time'] = cache_data['max_time']
                     data_to_insert['end'] = datetime.now(pytz.utc)
@@ -173,9 +159,15 @@ class SlowQueryMonitor:
                     if not existing_query:
                         await self.collection.insert_one(data_to_insert)
                         self.logger.info(
-                            f"Inserted slow query data: instance={self.mysql_connector.instance_name}, "
-                            f"DB={data_to_insert['db']}, PID={pid}, execution_time={data_to_insert['time']}s"
+                            f"Saved slow query - Instance: {self.mysql_connector.instance_name}, "
+                            f"DB: {data_to_insert['db']}, PID: {pid}, Time: {data_to_insert['time']}s"
                         )
+
+                    del self.pid_time_cache[pid]
+
+                except Exception as e:
+                    self.logger.error(f"Error handling finished query - Instance: {self.mysql_connector.instance_name}, "
+                                    f"PID: {pid}, Error: {str(e)}")
 
     async def run_mysql_slow_queries(self) -> None:
         try:
@@ -183,7 +175,6 @@ class SlowQueryMonitor:
 
             while not self._stop_event.is_set():
                 await self.query_mysql_instance()
-                # 설정된 모니터링 간격 사용
                 await asyncio.sleep(MONITORING_INTERVAL)
 
         except asyncio.CancelledError:
@@ -200,29 +191,31 @@ async def main():
     try:
         await mongodb.initialize()
 
-        db = await mongodb.get_database()
-        collection = db[mongo_settings.MONGO_RDS_INSTANCE_COLLECTION]
-        latest_instances = await collection.find_one(
-            sort=[('timestamp', -1)]
-        )
+        instance_loader = InstanceLoader()
+        realtime_instances = await instance_loader.load_realtime_instances()
 
-        if not latest_instances:
-            logger.error("No RDS instances found in MongoDB")
+        if not realtime_instances:
+            logger.error("No real-time monitoring instances found")
             return
 
-        for instance in latest_instances['instances']:
-            if instance.get('Endpoint'):
-                try:
-                    mysql_conn = await SlowQueryMonitor.create_mysql_connector(
-                        instance['Endpoint'],
-                        instance['DBInstanceIdentifier']
-                    )
-                    monitor = SlowQueryMonitor(mysql_conn)
-                    await monitor.initialize()
-                    monitors.append(monitor)
-                except Exception as e:
-                    logger.error(f"Failed to initialize monitor for {instance['DBInstanceIdentifier']}: {e}")
-                    continue
+        logger.info(f"Found {len(realtime_instances)} instances for real-time monitoring")
+
+        for instance in realtime_instances:
+            try:
+                mysql_conn = await SlowQueryMonitor.create_mysql_connector(
+                    {
+                        'Address': instance['host'],
+                        'Port': instance['port']
+                    },
+                    instance['instance_name']
+                )
+                monitor = SlowQueryMonitor(mysql_conn)
+                await monitor.initialize()
+                monitors.append(monitor)
+                logger.info(f"Initialized monitor for {instance['instance_name']}")
+            except Exception as e:
+                logger.error(f"Failed to initialize monitor for {instance['instance_name']}: {e}")
+                continue
 
         if not monitors:
             logger.error("No monitors could be initialized")
@@ -240,4 +233,8 @@ async def main():
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     asyncio.run(main())

@@ -6,7 +6,7 @@ Provides read-only access to MySQL for slow query analysis
 import asyncmy
 import asyncmy.cursors
 from asyncmy import create_pool
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import logging
 from configs.mysql_conf import MySQLSettings
 
@@ -71,6 +71,38 @@ class MySQLConnector:
             self.pool.close()
             await self.pool.wait_closed()
             logger.info("MySQL connection pool closed")
+
+    async def execute_query(self, query: str, params: Tuple = None) -> List[Dict[str, Any]]:
+        """Execute a query on the MySQL instance."""
+        if not self.pool:
+            raise ValueError(f"No connection pool found for {self.instance_name}")
+
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.cursor(asyncmy.cursors.DictCursor) as cursor:
+                    if params:
+                        await cursor.execute(query, params)
+                    else:
+                        await cursor.execute(query)
+                    return await cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Error executing query for {self.instance_name} - {self.instance_name}: {str(e)}")
+            logger.error(f"Query: {query}")
+            logger.error(f"Params: {params}")
+            raise
+
+    async def set_database(self, database: str) -> None:
+        """Set the database for the instance."""
+        if not self.pool:
+            raise ValueError(f"No connection pool found for {self.instance_name}")
+
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.select_db(database)
+            logger.info(f"Set database to {database} for {self.instance_name} - {self.instance_name}")
+        except Exception as e:
+            logger.error(f"Error setting database for {self.instance_name} - {self.instance_name}: {str(e)}")
+            raise
 
     @staticmethod
     async def test_connection(settings: MySQLSettings) -> bool:
