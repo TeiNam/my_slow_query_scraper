@@ -33,6 +33,9 @@ class MongoSettings(BaseSettings):
     MONGO_RDS_MYSQL_SLOW_SQL_PLAN_COLLECTION: str = config.get(
         "MONGO_RDS_MYSQL_SLOW_SQL_PLAN_COLLECTION", "rds_mysql_slow_query_explain"
     )
+    MONGO_CW_MYSQL_SLOW_SQL_COLLECTION: str = config.get(
+        "MONGO_CW_MYSQL_SLOW_SQL_COLLECTION", "rds_mysql_cw_slow_query"
+    )
 
     class Config:
         extra = "ignore"  # 추가 필드 허용

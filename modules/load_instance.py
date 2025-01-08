@@ -45,6 +45,7 @@ class InstanceLoader:
             'instance_name': instance['DBInstanceIdentifier'],
             'host': instance.get('Endpoint', {}).get('Address', ''),
             'port': instance.get('Endpoint', {}).get('Port', 3306),
+            'region': instance.get('Region', ''),  # region 정보 추가
             'tags': instance.get('Tags', {})
         }
 
