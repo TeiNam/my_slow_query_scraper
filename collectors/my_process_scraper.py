@@ -14,7 +14,6 @@ from modules.mysql_connector import MySQLConnector
 from modules.load_instance import InstanceLoader
 from configs.mysql_conf import MySQLSettings
 from configs.mongo_conf import mongo_settings
-from configs.base_config import config
 from configs.scraper_conf import scraper_settings
 import logging
 
@@ -50,17 +49,17 @@ class SlowQueryMonitor:
         self.collection = None
 
     @staticmethod
-    async def create_mysql_connector(endpoint: Dict[str, Any], instance_name: str) -> MySQLConnector:
-        """RDS 엔드포인트 정보로 MySQL 커넥터 생성"""
+    async def create_mysql_connector(instance_info: Dict[str, Any]) -> MySQLConnector:
+        """인스턴스 정보로 MySQL 커넥터 생성"""
         settings = MySQLSettings(
-            host=endpoint['Address'],
-            port=endpoint['Port'],
-            user=config.get('MGMT_USER', 'mgmt_mysql'),
-            password=config.get('MGMT_USER_PASS'),
-            database='performance_schema'  # performance_schema에서 변경
+            host=instance_info['host'],
+            port=instance_info['port'],
+            user=instance_info['mgmt_user'],
+            password=instance_info['mgmt_password'],
+            database='performance_schema'
         )
 
-        mysql_conn = MySQLConnector(instance_name)
+        mysql_conn = MySQLConnector(instance_info['instance_name'])
         await mysql_conn.create_pool(settings)
         return mysql_conn
 
@@ -202,13 +201,7 @@ async def main():
 
         for instance in realtime_instances:
             try:
-                mysql_conn = await SlowQueryMonitor.create_mysql_connector(
-                    {
-                        'Address': instance['host'],
-                        'Port': instance['port']
-                    },
-                    instance['instance_name']
-                )
+                mysql_conn = await SlowQueryMonitor.create_mysql_connector(instance)
                 monitor = SlowQueryMonitor(mysql_conn)
                 await monitor.initialize()
                 monitors.append(monitor)

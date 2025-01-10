@@ -91,6 +91,54 @@ class MySQLConnector:
             logger.error(f"Params: {params}")
             raise
 
+    @staticmethod
+    async def execute_query_with_new_connection(connection_params: Dict[str, Any], query: str) -> List[Dict[str, Any]]:
+        """
+        Create a new connection and execute a query
+
+        Args:
+            connection_params (Dict[str, Any]): MySQL connection parameters
+                Required keys:
+                - host: database host
+                - port: database port
+                - user: database user
+                - password: database password
+                - db: database name
+                Optional keys:
+                - charset: database charset (default: utf8mb4)
+                - connect_timeout: connection timeout in seconds (default: 10)
+            query (str): Query to execute
+
+        Returns:
+            List[Dict[str, Any]]: Query results
+        """
+        try:
+            # Create a new connection pool with the provided parameters
+            temp_pool = await create_pool(
+                host=connection_params['host'],
+                port=connection_params['port'],
+                user=connection_params['user'],
+                password=connection_params['password'],
+                db=connection_params['db'],
+                charset=connection_params.get('charset', 'utf8mb4'),
+                maxsize=1,  # Single connection is sufficient for temporary use
+                connect_timeout=connection_params.get('connect_timeout', 10)
+            )
+
+            try:
+                async with temp_pool.acquire() as conn:
+                    async with conn.cursor(asyncmy.cursors.DictCursor) as cursor:
+                        await cursor.execute(query)
+                        return await cursor.fetchall()
+            finally:
+                temp_pool.close()
+                await temp_pool.wait_closed()
+
+        except Exception as e:
+            logger.error(f"Error executing query with new connection - {str(e)}")
+            logger.error(f"Query: {query}")
+            raise
+
     async def set_database(self, database: str) -> None:
         """Set the database for the instance."""
         if not self.pool:
@@ -99,9 +147,9 @@ class MySQLConnector:
         try:
             async with self.pool.acquire() as conn:
                 await conn.select_db(database)
-            logger.info(f"Set database to {database} for {self.instance_name} - {self.instance_name}")
+            logger.info(f"Set database to {database} for {self.instance_name}")
         except Exception as e:
-            logger.error(f"Error setting database for {self.instance_name} - {self.instance_name}: {str(e)}")
+            logger.error(f"Error setting database for {self.instance_name}: {str(e)}")
             raise
 
     @staticmethod

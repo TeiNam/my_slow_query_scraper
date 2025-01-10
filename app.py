@@ -2,21 +2,20 @@
 """
 Slow Query Collector Application
 This module serves as the main entry point for the slow query collector application.
-It provides the basic async framework for managing multiple collectors.
+It automatically discovers and integrates API routers from the apis directory.
 """
 
 import asyncio
 import logging
-from typing import List, Optional, Dict
+import importlib
+from datetime import datetime
+from typing import Dict, Optional, Any
+from modules.collectors import BaseCollector
 from pathlib import Path
-from modules.time_utils import (
-    get_current_utc,
-    format_utc,
-    get_date_range,
-    to_utc,
-    get_current_kst,
-    format_kst
-)
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, APIRouter
+from modules.mongodb_connector import MongoDBConnector
+from modules.time_utils import (get_current_utc, format_utc)
 
 # Configure logging
 logging.basicConfig(
@@ -25,29 +24,79 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-class QueryCollectorApp:
-    """Main application class for managing slow query collectors."""
+class APIManager:
+    """API 관리 클래스"""
 
     def __init__(self):
-        self.collectors: Dict[str, "BaseCollector"] = {}
+        # FastAPI 인스턴스를 저장하는 딕셔너리임을 명시
+        self.apis: Dict[str, FastAPI] = {}
+        self._base_path = Path(__file__).parent / 'apis'
+
+    async def discover_apis(self) -> None:
+        """apis 디렉토리에서 API 모듈을 자동으로 발견하고 로드"""
+        if not self._base_path.exists():
+            logger.error(f"APIs directory not found: {self._base_path}")
+            return
+
+        # .py 파일 검색
+        api_files = [f for f in self._base_path.glob("*.py")
+                     if f.is_file() and not f.name.startswith('__')]
+
+        for api_file in api_files:
+            module_name = f"apis.{api_file.stem}"
+            try:
+                module = importlib.import_module(module_name)
+
+                # FastAPI 앱 찾기
+                for attr_name, attr_value in module.__dict__.items():
+                    if isinstance(attr_value, FastAPI):
+                        self.apis[api_file.stem] = attr_value  # FastAPI 타입으로 저장
+                        logger.info(f"Loaded API: {api_file.stem}")
+                        break
+
+            except Exception as e:
+                logger.error(f"Error loading API {module_name}: {e}")
+
+
+class QueryCollectorApp:
+    """Main application class for managing slow query collectors and APIs."""
+
+    def __init__(self):
+        self.collectors: Dict[str, Any] = {}
+        self.api_manager = APIManager()
         self.is_running: bool = False
         self.start_time: Optional[datetime] = None
+        self.app = FastAPI(
+            title="Slow Query Collector",
+            description="Integrated API for collecting and monitoring slow queries",
+            version="1.0.0",
+            lifespan=self.lifespan
+        )
 
-    async def register_collector(self, name: str, collector: "BaseCollector") -> None:
-        """Register a new collector with the application.
+    @asynccontextmanager
+    async def lifespan(self, app: FastAPI):
+        """Application lifespan manager"""
+        try:
+            # Startup
+            await MongoDBConnector.initialize()
+            logger.info("MongoDB connection initialized")
+            await self.api_manager.discover_apis()
+            self._mount_apis()
+            yield
+        finally:
+            # Shutdown
+            await MongoDBConnector.close()
+            logger.info("MongoDB connection closed")
 
-        Args:
-            name: Unique identifier for the collector
-            collector: Instance of BaseCollector or its subclasses
-        """
-        if name in self.collectors:
-            logger.warning(f"Collector {name} already exists. Replacing...")
-        self.collectors[name] = collector
-        logger.info(f"Registered collector: {name}")
+    def _mount_apis(self) -> None:
+        """Mount discovered APIs to the main application"""
+        for api_name, api in self.api_manager.apis.items():
+            # API의 모든 라우트를 메인 앱에 등록
+            for route in api.routes:
+                self.app.routes.append(route)
 
     async def start(self) -> None:
-        """Start all registered collectors."""
+        """Start the application server"""
         if self.is_running:
             logger.warning("Application is already running")
             return
@@ -56,55 +105,38 @@ class QueryCollectorApp:
         self.start_time = get_current_utc()
         logger.info(f"Starting Query Collector Application at {format_utc(self.start_time)}")
 
-        # Create tasks for all collectors
-        collector_tasks = [
-            collector.start()
-            for collector in self.collectors.values()
-        ]
-
-        try:
-            await asyncio.gather(*collector_tasks)
-        except Exception as e:
-            logger.error(f"Error running collectors: {e}")
-            raise
+        # Uvicorn 서버 시작
+        import uvicorn
+        config = uvicorn.Config(
+            app=self.app,
+            host="0.0.0.0",
+            port=8000,
+            log_level="info"
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
 
     async def stop(self) -> None:
-        """Stop all registered collectors gracefully."""
+        """Stop the application gracefully"""
         if not self.is_running:
             logger.warning("Application is not running")
             return
 
-        logger.info("Stopping all collectors...")
-        stop_tasks = [
-            collector.stop()
-            for collector in self.collectors.values()
-        ]
-
-        await asyncio.gather(*stop_tasks)
+        logger.info("Stopping application...")
         self.is_running = False
 
     def get_uptime(self) -> Optional[float]:
-        """Return application uptime in seconds."""
+        """Return application uptime in seconds"""
         if not self.start_time:
             return None
         return (get_current_utc() - self.start_time).total_seconds()
 
-
 async def main():
-    """Application entry point."""
+    """Application entry point"""
     app = QueryCollectorApp()
 
     try:
-        # TODO: Register collectors here
-        # await app.register_collector("mysql", MySQLCollector())
-        # await app.register_collector("postgres", PostgresCollector())
-
         await app.start()
-
-        # Keep the application running
-        while True:
-            await asyncio.sleep(1)
-
     except KeyboardInterrupt:
         logger.info("Received shutdown signal")
     finally:

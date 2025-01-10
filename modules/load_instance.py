@@ -5,8 +5,10 @@ Loads RDS instances from MongoDB with different filtering options
 
 from modules.mongodb_connector import MongoDBConnector
 from configs.mongo_conf import mongo_settings
+from configs.base_config import config
 import logging
 from typing import List, Dict, Any, Optional
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,9 @@ class InstanceLoader:
             'instance_name': instance['DBInstanceIdentifier'],
             'host': instance.get('Endpoint', {}).get('Address', ''),
             'port': instance.get('Endpoint', {}).get('Port', 3306),
-            'region': instance.get('Region', ''),  # region 정보 추가
+            'region': instance.get('Region', ''),
+            'mgmt_user': config.get('MGMT_USER', 'mgmt_mysql'),
+            'mgmt_password': config.get('MGMT_USER_PASS', ''),
             'tags': instance.get('Tags', {})
         }
 
