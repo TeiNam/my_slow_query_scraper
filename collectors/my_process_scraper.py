@@ -16,8 +16,15 @@ from configs.mysql_conf import MySQLSettings
 from configs.mongo_conf import mongo_settings
 from configs.scraper_conf import scraper_settings
 import logging
+from modules.common_logger import setup_logger
 
-logger = logging.getLogger(__name__)
+# 로깅 설정
+setup_logger()
+logger = logging.getLogger('collectors.my_process_scraper')
+
+# 중복 설정 제거 (아래 줄 삭제)
+# scraper_logger = logging.getLogger('collectors.my_process_scraper')
+# scraper_logger.setLevel(logging.DEBUG)
 
 # Get configuration values from scraper settings
 EXEC_TIME = scraper_settings['exec_time']
@@ -42,11 +49,12 @@ class QueryDetails:
 class SlowQueryMonitor:
     def __init__(self, mysql_connector: MySQLConnector):
         self.pid_time_cache: Dict[int, Dict[str, Any]] = {}
-        self.logger = logging.getLogger(__name__)
         self.mysql_connector = mysql_connector
         self._stop_event = asyncio.Event()
         self.mongodb = None
         self.collection = None
+        # 초기화 시점 확인을 위한 로그 추가
+        logger.warning(f"Created SlowQueryMonitor instance for {mysql_connector.instance_name}")
 
     @staticmethod
     async def create_mysql_connector(instance_info: Dict[str, Any]) -> MySQLConnector:
@@ -70,7 +78,11 @@ class SlowQueryMonitor:
     async def initialize(self):
         db = await mongodb.get_database()
         self.collection = db[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION]
-        logger.info(f"Initialized SlowQueryMonitor for {self.mysql_connector.instance_name}")
+        # 로그 레벨을 DEBUG로 변경하여 더 자세한 정보 출력
+        logger.debug("Initializing SlowQueryMonitor...")
+        logger.info(f"Initialized SlowQueryMonitor for instance: {self.mysql_connector.instance_name}")
+        # 로그가 실제로 출력되는지 확인하기 위한 추가 로그
+        logger.warning(f"Monitor initialization complete for {self.mysql_connector.instance_name}")
 
     async def query_mysql_instance(self) -> None:
         try:
@@ -93,12 +105,12 @@ class SlowQueryMonitor:
                     time_value = float(row['TIME'])
                     await self.process_query_result(row, current_pids)
                 except (ValueError, TypeError) as e:
-                    self.logger.error(f"Failed to process TIME value: {row['TIME']}, Error: {e}")
+                    logger.error(f"Failed to process TIME value: {row['TIME']}, Error: {e}")
 
             await self.handle_finished_queries(current_pids)
 
         except Exception as e:
-            self.logger.error(f"Error querying MySQL instance {self.mysql_connector.instance_name}: {e}")
+            logger.error(f"Error querying MySQL instance {self.mysql_connector.instance_name}: {e}")
 
     async def process_query_result(self, row: Dict[str, Any], current_pids: set) -> None:
         pid, db, user, host, time, info = row['ID'], row['DB'], row['USER'], row['HOST'], row['TIME'], row['INFO']
@@ -107,7 +119,7 @@ class SlowQueryMonitor:
         try:
             time_value = float(time)
             if time_value >= EXEC_TIME:
-                self.logger.info(f"[CACHE] Processing slow query - PID: {pid}, Time: {time_value}s")
+                logger.info(f"[CACHE] Processing slow query - PID: {pid}, Time: {time_value}s")
 
                 # 단순화된 캐시 처리
                 cache_data = self.pid_time_cache.setdefault(pid, {'max_time': 0})
@@ -133,12 +145,12 @@ class SlowQueryMonitor:
                     start=cache_data['start']
                 )
 
-                self.logger.info(
+                logger.info(
                     f"[CACHE] Cached slow query - Instance: {self.mysql_connector.instance_name}, "
                     f"PID: {pid}, DB: {db}, Time: {time_value}s"
                 )
         except (ValueError, TypeError) as e:
-            self.logger.error(f"[ERROR] Failed to process query result - PID: {pid}, Time value: {time}, Error: {e}")
+            logger.error(f"[ERROR] Failed to process query result - PID: {pid}, Time value: {time}, Error: {e}")
 
     async def handle_finished_queries(self, current_pids: set) -> None:
         for pid, cache_data in list(self.pid_time_cache.items()):
@@ -157,7 +169,7 @@ class SlowQueryMonitor:
 
                     if not existing_query:
                         await self.collection.insert_one(data_to_insert)
-                        self.logger.info(
+                        logger.info(
                             f"Saved slow query - Instance: {self.mysql_connector.instance_name}, "
                             f"DB: {data_to_insert['db']}, PID: {pid}, Time: {data_to_insert['time']}s"
                         )
@@ -165,24 +177,24 @@ class SlowQueryMonitor:
                     del self.pid_time_cache[pid]
 
                 except Exception as e:
-                    self.logger.error(f"Error handling finished query - Instance: {self.mysql_connector.instance_name}, "
+                    logger.error(f"Error handling finished query - Instance: {self.mysql_connector.instance_name}, "
                                     f"PID: {pid}, Error: {str(e)}")
 
     async def run_mysql_slow_queries(self) -> None:
         try:
-            self.logger.info(f"Starting slow query monitoring for {self.mysql_connector.instance_name}")
+            logger.info(f"Starting slow query monitoring for {self.mysql_connector.instance_name}")
 
             while not self._stop_event.is_set():
                 await self.query_mysql_instance()
                 await asyncio.sleep(MONITORING_INTERVAL)
 
         except asyncio.CancelledError:
-            self.logger.info(f"Slow query monitoring task was cancelled for {self.mysql_connector.instance_name}")
+            logger.info(f"Slow query monitoring task was cancelled for {self.mysql_connector.instance_name}")
         except Exception as e:
-            self.logger.error(
+            logger.error(
                 f"An error occurred in slow query monitoring for {self.mysql_connector.instance_name}: {e}")
         finally:
-            self.logger.info(f"Slow query monitoring stopped for {self.mysql_connector.instance_name}")
+            logger.info(f"Slow query monitoring stopped for {self.mysql_connector.instance_name}")
 
 
 async def main():
@@ -224,10 +236,5 @@ async def main():
             await monitor.stop()
         await mongodb.close()
 
-
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
     asyncio.run(main())

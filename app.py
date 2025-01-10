@@ -7,28 +7,49 @@ It automatically discovers and integrates API routers from the apis directory.
 
 import asyncio
 import logging
+import sys
 import importlib
 from datetime import datetime
-from typing import Dict, Optional, Any
-from modules.collectors import BaseCollector
+from typing import Dict, Optional
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter
 from modules.mongodb_connector import MongoDBConnector
-from modules.time_utils import (get_current_utc, format_utc)
+from modules.common_logger import setup_logger
+from modules.time_utils import (
+    get_current_utc,
+    format_utc
+)
 
-# Configure logging
+# Add project root to Python path
+project_root = str(Path(__file__).parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+# Set up logging
+
+setup_logger()
+logger = logging.getLogger(__name__)
+
+# Configure root logger with detailed format
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - [%(levelname)s] - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True  # 기존 로깅 설정을 덮어씀
 )
-logger = logging.getLogger(__name__)
+
+# Disable uvicorn access logger
+logging.getLogger("uvicorn.access").disabled = True
+
+# Set log level for specific loggers
+logging.getLogger('collectors.my_process_scraper').setLevel(logging.INFO)
+logging.getLogger('collectors').setLevel(logging.INFO)
 
 class APIManager:
     """API 관리 클래스"""
 
     def __init__(self):
-        # FastAPI 인스턴스를 저장하는 딕셔너리임을 명시
         self.apis: Dict[str, FastAPI] = {}
         self._base_path = Path(__file__).parent / 'apis'
 
@@ -38,7 +59,6 @@ class APIManager:
             logger.error(f"APIs directory not found: {self._base_path}")
             return
 
-        # .py 파일 검색
         api_files = [f for f in self._base_path.glob("*.py")
                      if f.is_file() and not f.name.startswith('__')]
 
@@ -50,7 +70,16 @@ class APIManager:
                 # FastAPI 앱 찾기
                 for attr_name, attr_value in module.__dict__.items():
                     if isinstance(attr_value, FastAPI):
-                        self.apis[api_file.stem] = attr_value  # FastAPI 타입으로 저장
+                        # API 경로 수정
+                        router = APIRouter(prefix="/api/v1")
+                        for route in attr_value.routes:
+                            router.routes.append(route)
+
+                        # 새로운 FastAPI 앱 생성
+                        new_app = FastAPI()
+                        new_app.include_router(router)
+
+                        self.apis[api_file.stem] = new_app
                         logger.info(f"Loaded API: {api_file.stem}")
                         break
 
@@ -62,7 +91,6 @@ class QueryCollectorApp:
     """Main application class for managing slow query collectors and APIs."""
 
     def __init__(self):
-        self.collectors: Dict[str, Any] = {}
         self.api_manager = APIManager()
         self.is_running: bool = False
         self.start_time: Optional[datetime] = None
@@ -82,6 +110,7 @@ class QueryCollectorApp:
             logger.info("MongoDB connection initialized")
             await self.api_manager.discover_apis()
             self._mount_apis()
+            logger.info("APIs mounted successfully")
             yield
         finally:
             # Shutdown
@@ -91,9 +120,9 @@ class QueryCollectorApp:
     def _mount_apis(self) -> None:
         """Mount discovered APIs to the main application"""
         for api_name, api in self.api_manager.apis.items():
-            # API의 모든 라우트를 메인 앱에 등록
             for route in api.routes:
                 self.app.routes.append(route)
+            logger.info(f"Mounted routes for {api_name}")
 
     async def start(self) -> None:
         """Start the application server"""
@@ -105,13 +134,14 @@ class QueryCollectorApp:
         self.start_time = get_current_utc()
         logger.info(f"Starting Query Collector Application at {format_utc(self.start_time)}")
 
-        # Uvicorn 서버 시작
+        # Configure and start uvicorn server
         import uvicorn
         config = uvicorn.Config(
             app=self.app,
             host="0.0.0.0",
             port=8000,
-            log_level="info"
+            log_level="info",
+            log_config=None,  # Disable uvicorn's default logging config
         )
         server = uvicorn.Server(config)
         await server.serve()
@@ -131,8 +161,10 @@ class QueryCollectorApp:
             return None
         return (get_current_utc() - self.start_time).total_seconds()
 
+
 async def main():
     """Application entry point"""
+    logger.info("Initializing Query Collector Application")
     app = QueryCollectorApp()
 
     try:
@@ -141,6 +173,7 @@ async def main():
         logger.info("Received shutdown signal")
     finally:
         await app.stop()
+        logger.info("Application shutdown complete")
 
 
 if __name__ == "__main__":
