@@ -54,7 +54,7 @@ class ExplainCollector:
         try:
             mongodb = await MongoDBConnector.get_database()
             slow_query_collection = mongodb[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION]
-            plan_collection = mongodb[mongo_settings.MONGO_SLOW_LOG_PLAN_COLLECTION]
+            plan_collection = mongodb[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_PLAN_COLLECTION]
 
             # PID로 슬로우 쿼리 조회
             document = await slow_query_collection.find_one({"pid": pid})
