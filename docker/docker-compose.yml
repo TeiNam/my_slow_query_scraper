@@ -1,0 +1,76 @@
+version: '3.8'
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        - ENVIRONMENT=${ENVIRONMENT:-development}
+    ports:
+      - "8000:8000"
+    environment:
+      # 애플리케이션 환경 설정
+      - APP_ENV=${APP_ENV:-dev}
+      - APP_SECRET_NAME=${APP_SECRET_NAME:-slow-query-collector-secret}
+      # AWS 설정
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-ap-northeast-2}
+      - AWS_SSO_START_URL=${AWS_SSO_START_URL}
+      - AWS_SSO_REGION=${AWS_SSO_REGION:-ap-northeast-2}
+      - AWS_ROLE_NAME=${AWS_ROLE_NAME:-AdministratorAccess}
+      - AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
+      # MongoDB 설정
+      - MONGODB_URI=mongodb://${MONGODB_USER}:${MONGODB_PASSWORD}@mongodb:27017
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME:-mgmt_mysql}
+      - MONGODB_USER=${MONGODB_USER:-admin}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-admin}
+      - MONGO_TLS=${MONGO_TLS:-false}
+      # MySQL 설정
+      - MYSQL_EXEC_TIME=${MYSQL_EXEC_TIME:-2}
+      - MYSQL_MONITORING_INTERVAL=${MYSQL_MONITORING_INTERVAL:-1}
+      - MGMT_USER=${MGMT_USER}
+      - MGMT_USER_PASS=${MGMT_USER_PASS}
+      # 시스템 설정
+      - TZ=Asia/Seoul
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - app-network
+
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGODB_USER:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_PASSWORD:-admin}
+      - MONGO_INITDB_DATABASE=${MONGODB_DB_NAME:-mgmt_mysql}
+      - TZ=Asia/Seoul
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
