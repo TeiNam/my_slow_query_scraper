@@ -11,8 +11,7 @@ import logging
 from datetime import datetime
 import pytz
 from collectors.explain_collector import ExplainCollector
-from collectors.my_process_scraper import SlowQueryMonitor
-from modules.load_instance import InstanceLoader
+from collectors.my_process_scraper import SlowQueryMonitor, initialize_monitors, run_monitors
 from modules.mongodb_connector import MongoDBConnector
 from configs.mongo_conf import mongo_settings
 from modules.common_logger import setup_logger
@@ -60,38 +59,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
 async def run_all_monitors():
     """Run monitoring for all instances"""
     global monitors
     try:
         await MongoDBConnector.initialize()
 
-        instance_loader = InstanceLoader()
-        realtime_instances = await instance_loader.load_realtime_instances()
-
-        if not realtime_instances:
-            logger.warning("No real-time monitoring instances found")
-            return
-
-        logger.info(f"Found {len(realtime_instances)} instances for real-time monitoring")
-
-        for instance in realtime_instances:
-            try:
-                mysql_conn = await SlowQueryMonitor.create_mysql_connector(instance)
-                monitor = SlowQueryMonitor(mysql_conn)
-                await monitor.initialize()
-                monitors.append(monitor)
-                logger.info(f"Initialized monitor for {instance['instance_name']}")
-            except Exception as e:
-                logger.error(f"Failed to initialize monitor for {instance['instance_name']}: {e}")
-                continue
-
-        if not monitors:
-            logger.error("No monitors could be initialized")
-            return
-
-        tasks = [monitor.run_mysql_slow_queries() for monitor in monitors]
-        await asyncio.gather(*tasks)
+        monitors = await initialize_monitors()
+        await run_monitors(monitors)
 
     except asyncio.CancelledError:
         logger.info("Monitoring cancelled")

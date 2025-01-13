@@ -7,7 +7,7 @@ import asyncio
 import pytz
 import re
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from modules.mongodb_connector import mongodb
 from modules.mysql_connector import MySQLConnector
@@ -22,16 +22,11 @@ from modules.common_logger import setup_logger
 setup_logger()
 logger = logging.getLogger('collectors.my_process_scraper')
 
-# 중복 설정 제거 (아래 줄 삭제)
-# scraper_logger = logging.getLogger('collectors.my_process_scraper')
-# scraper_logger.setLevel(logging.DEBUG)
-
-# Get configuration values from scraper settings
+# 설정 값 가져오기
 EXEC_TIME = scraper_settings['exec_time']
 EXCLUDED_DBS = scraper_settings['excluded_dbs']
 EXCLUDED_USERS = scraper_settings['excluded_users']
 MONITORING_INTERVAL = scraper_settings['monitoring_interval']
-
 
 @dataclass
 class QueryDetails:
@@ -196,39 +191,53 @@ class SlowQueryMonitor:
         finally:
             logger.info(f"Slow query monitoring stopped for {self.mysql_connector.instance_name}")
 
+monitors: List[SlowQueryMonitor] = []
+
+async def initialize_monitors() -> List[SlowQueryMonitor]:
+    """Initialize monitors for all instances"""
+    global monitors
+    monitors = []  # 전역 변수 초기화
+
+    instance_loader = InstanceLoader()
+    realtime_instances = await instance_loader.load_realtime_instances()
+
+    if not realtime_instances:
+        logger.warning("No real-time monitoring instances found")
+        return monitors
+
+    logger.info(f"Found {len(realtime_instances)} instances for real-time monitoring")
+
+    for instance in realtime_instances:
+        try:
+            mysql_conn = await SlowQueryMonitor.create_mysql_connector(instance)
+            monitor = SlowQueryMonitor(mysql_conn)
+            await monitor.initialize()
+            monitors.append(monitor)
+            logger.info(f"Initialized monitor for {instance['instance_name']}")
+        except Exception as e:
+            logger.error(f"Failed to initialize monitor for {instance['instance_name']}: {e}")
+            continue
+
+    return monitors
+
+async def run_monitors(monitor_instances: List[SlowQueryMonitor]):
+    """Run all initialized monitors"""
+    if not monitor_instances:
+        logger.error("No monitors could be initialized")
+        return
+
+    tasks = [monitor.run_mysql_slow_queries() for monitor in monitor_instances]
+    await asyncio.gather(*tasks)
+
 
 async def main():
-    monitors = []
+    global monitors
+    monitors = []  # 전역 변수 초기화
+
     try:
         await mongodb.initialize()
-
-        instance_loader = InstanceLoader()
-        realtime_instances = await instance_loader.load_realtime_instances()
-
-        if not realtime_instances:
-            logger.error("No real-time monitoring instances found")
-            return
-
-        logger.info(f"Found {len(realtime_instances)} instances for real-time monitoring")
-
-        for instance in realtime_instances:
-            try:
-                mysql_conn = await SlowQueryMonitor.create_mysql_connector(instance)
-                monitor = SlowQueryMonitor(mysql_conn)
-                await monitor.initialize()
-                monitors.append(monitor)
-                logger.info(f"Initialized monitor for {instance['instance_name']}")
-            except Exception as e:
-                logger.error(f"Failed to initialize monitor for {instance['instance_name']}: {e}")
-                continue
-
-        if not monitors:
-            logger.error("No monitors could be initialized")
-            return
-
-        tasks = [monitor.run_mysql_slow_queries() for monitor in monitors]
-        await asyncio.gather(*tasks)
-
+        monitors = await initialize_monitors()
+        await run_monitors(monitors)
     except Exception as e:
         logger.error(f"Error in main: {e}")
     finally:
