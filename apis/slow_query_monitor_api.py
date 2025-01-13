@@ -146,6 +146,7 @@ async def get_monitor_status():
         timestamp=datetime.now(pytz.utc)
     )
 
+
 @app.post("/mysql/explain/{pid}", response_model=ExplainResponse)
 async def collect_query_explain(pid: int, background_tasks: BackgroundTasks):
     """Collect execution plan for a specific slow query PID"""
@@ -158,6 +159,35 @@ async def collect_query_explain(pid: int, background_tasks: BackgroundTasks):
             raise HTTPException(
                 status_code=404,
                 detail=f"No slow query found for PID {pid}"
+            )
+
+        # SQL 타입 체크
+        sql_text = query_doc['sql_text'].lower().strip()
+        if sql_text.startswith('update'):
+            return ExplainResponse(
+                status="manual_check_required",
+                message="UPDATE 쿼리는 직접 SELECT 쿼리로 변환해서 확인하는 작업이 필요합니다.",
+                pid=pid,
+                instance_name=query_doc['instance'],
+                timestamp=datetime.now(pytz.utc)
+            )
+
+        if sql_text.startswith('delete'):
+            return ExplainResponse(
+                status="manual_check_required",
+                message="DELETE 쿼리는 직접 SELECT 쿼리로 변환해서 확인하는 작업이 필요합니다.",
+                pid=pid,
+                instance_name=query_doc['instance'],
+                timestamp=datetime.now(pytz.utc)
+            )
+
+        if sql_text.startswith("select") and "into" in sql_text:
+            return ExplainResponse(
+                status="manual_check_required",
+                message="SELECT INTO 쿼리는 프로시저의 내용을 직접 확인하는 과정이 필요합니다.",
+                pid=pid,
+                instance_name=query_doc['instance'],
+                timestamp=datetime.now(pytz.utc)
             )
 
         collector = ExplainCollector()

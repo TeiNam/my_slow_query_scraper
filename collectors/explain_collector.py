@@ -35,8 +35,17 @@ class ExplainCollector:
     def validate_sql_query(sql_text: str) -> str:
         """SQL 쿼리 유효성 검증"""
         query_without_comments = ExplainCollector.remove_sql_comments(sql_text).strip()
+
+        # UPDATE/DELETE/SELECT INTO 쿼리 확인
+        if query_without_comments.lower().startswith(('update', 'delete')):
+            raise ValueError("UPDATE/DELETE 쿼리는 수동 확인이 필요합니다.")
+
+        if query_without_comments.lower().startswith("select") and "into" in query_without_comments.lower():
+            raise ValueError("프로시저에서 실행된 SELECT INTO 쿼리는 수동 확인이 필요합니다.")
+
         if not query_without_comments.lower().startswith("select"):
-            raise ValueError("SELECT 쿼리만 가능합니다.")
+            raise ValueError("SELECT 쿼리만 실행 계획 수집이 가능합니다.")
+
         return query_without_comments
 
     async def get_instance_info(self, instance_name: str) -> Optional[Dict[str, Any]]:
@@ -70,49 +79,65 @@ class ExplainCollector:
 
             # MySQL 연결 설정
             mysql_conn = MySQLConnector(instance_info['instance_name'])
-            json_execution_plan = None
-            tree_execution_plan = None
+            execution_plans = {
+                'json': None,
+                'tree': None,
+                'error': None
+            }
 
             # SQL 검증 및 실행 계획 수집
             sql_text = document['sql_text']
             try:
                 validated_sql = self.validate_sql_query(sql_text)
+                connection_config = {
+                    "host": instance_info['host'],
+                    "port": instance_info['port'],
+                    "user": instance_info['mgmt_user'],
+                    "password": instance_info['mgmt_password'],
+                    "db": document['db'],
+                    "charset": 'utf8mb4'
+                }
 
-                # JSON 형식 실행 계획 수집
-                json_explain_query = f"EXPLAIN FORMAT=JSON {validated_sql}"
-                json_execution_plan = await mysql_conn.execute_query_with_new_connection(
-                    {
-                        "host": instance_info['host'],
-                        "port": instance_info['port'],
-                        "user": instance_info['mgmt_user'],
-                        "password": instance_info['mgmt_password'],
-                        "db": document['db'],
-                        "charset": 'utf8mb4'
-                    },
-                    json_explain_query
-                )
+                # 쿼리 변수를 try 블록 밖에서 정의
+                json_explain_query = ""
+                tree_explain_query = ""
 
-                # TREE 형식 실행 계획 수집
-                tree_explain_query = f"EXPLAIN FORMAT=TREE {validated_sql}"
-                tree_execution_plan = await mysql_conn.execute_query_with_new_connection(
-                    {
-                        "host": instance_info['host'],
-                        "port": instance_info['port'],
-                        "user": instance_info['mgmt_user'],
-                        "password": instance_info['mgmt_password'],
-                        "db": document['db'],
-                        "charset": 'utf8mb4'
-                    },
-                    tree_explain_query
-                )
+                try:
+                    # JSON 형식 실행 계획 수집
+                    json_explain_query = f"EXPLAIN FORMAT=JSON {validated_sql}"
+                    json_execution_plan = await mysql_conn.execute_query_with_new_connection(
+                        connection_config,
+                        json_explain_query
+                    )
 
-                if not json_execution_plan or 'EXPLAIN' not in json_execution_plan[0]:
-                    logger.error(f"JSON EXPLAIN 결과가 예상된 형식이 아님: {pid}")
-                    return
+                    if json_execution_plan and 'EXPLAIN' in json_execution_plan[0]:
+                        execution_plans['json'] = json.loads(json_execution_plan[0]['EXPLAIN'])
+                    else:
+                        logger.warning(f"JSON EXPLAIN 결과가 예상된 형식이 아님: {pid}")
 
-                if not tree_execution_plan or 'EXPLAIN' not in tree_execution_plan[0]:
-                    logger.error(f"TREE EXPLAIN 결과가 예상된 형식이 아님: {pid}")
-                    return
+                except Exception as e:
+                    execution_plans['error'] = str(e)
+                    logger.error(f"JSON EXPLAIN 수집 실패: {str(e)}")
+                    logger.error(f"Query: {json_explain_query}")
+
+                try:
+                    # TREE 형식 실행 계획 수집
+                    tree_explain_query = f"EXPLAIN FORMAT=TREE {validated_sql}"
+                    tree_execution_plan = await mysql_conn.execute_query_with_new_connection(
+                        connection_config,
+                        tree_explain_query
+                    )
+
+                    if tree_execution_plan and 'EXPLAIN' in tree_execution_plan[0]:
+                        execution_plans['tree'] = tree_execution_plan[0]['EXPLAIN']
+                    else:
+                        logger.warning(f"TREE EXPLAIN 결과가 예상된 형식이 아님: {pid}")
+
+                except Exception as e:
+                    if not execution_plans['error']:
+                        execution_plans['error'] = str(e)
+                    logger.error(f"TREE EXPLAIN 수집 실패: {str(e)}")
+                    logger.error(f"Query: {tree_explain_query}")
 
                 # 실행 계획 저장
                 plan_document = {
@@ -125,10 +150,7 @@ class ExplainCollector:
                     "start": document['start'],
                     "end": document['end'],
                     "sql_text": self.remove_sql_comments(sql_text),
-                    "explain_result": {
-                        "json": json.loads(json_execution_plan[0]['EXPLAIN']),
-                        "tree": tree_execution_plan[0]['EXPLAIN']
-                    },
+                    "explain_result": execution_plans,
                     "created_at": datetime.now()
                 }
 
@@ -138,7 +160,27 @@ class ExplainCollector:
                     upsert=True
                 )
 
-                logger.info(f"PID {pid}의 실행 계획 수집 완료 (JSON & TREE)")
+                if execution_plans['error']:
+                    logger.warning(f"PID {pid}의 실행 계획 수집 완료 (with errors)")
+                else:
+                    logger.info(f"PID {pid}의 실행 계획 수집 완료")
+
+            except ValueError as ve:
+                logger.error(f"SQL 검증 실패: {str(ve)}")
+                plan_document = {
+                    "pid": pid,
+                    "instance": document['instance'],
+                    "db": document['db'],
+                    "sql_text": self.remove_sql_comments(sql_text),
+                    "explain_result": {"error": str(ve)},
+                    "created_at": datetime.now()
+                }
+                await plan_collection.update_one(
+                    {"pid": pid},
+                    {"$set": plan_document},
+                    upsert=True
+                )
+                raise
 
             except Exception as e:
                 logger.error(f"쿼리 실행 계획 수집 중 오류 발생: {str(e)}")
