@@ -1,0 +1,44 @@
+### Explain Plan Visualization Tests
+
+### Get explain plan visualization
+GET http://localhost:8000/explain/612786858/visualize
+Accept: text/html
+
+### Try with non-existent PID
+GET http://localhost:8000/api/v1/explain/999999999/visualize
+Accept: text/html
+
+### Try with invalid PID format
+GET http://localhost:8000/api/v1/explain/invalid/visualize
+Accept: text/html
+
+### Test markdown download for comparison
+GET http://localhost:8000/api/v1/explain/629580663/markdown
+Accept: text/markdown
+
+
+### Explain Plans List Tests
+
+### Basic pagination test
+GET http://localhost:8000/explain/plans?page=1&page_size=20
+
+### Different page size
+GET http://localhost:8000/explain/plans?page=1&page_size=10
+
+### Second page
+GET http://localhost:8000/explain/plans?page=2&page_size=20
+
+### With date range
+GET http://localhost:8000/explain/plans?start_date=2025-01-14T00:00:00Z&end_date=2025-01-15T23:59:59Z
+
+### With instance filter
+GET http://localhost:8000/explain/plans?instance=prd-orderservice-read-instance-6
+
+### Combined filters
+GET http://localhost:8000/explain/plans?page=1&page_size=20&start_date=2025-01-14T00:00:00Z&end_date=2025-01-15T23:59:59Z&instance=prd-orderservice-read-instance-6
+
+### Invalid page number
+GET http://localhost:8000/explain/plans?page=0
+
+### Invalid page size
+GET http://localhost:8000/explain/plans?page_size=101

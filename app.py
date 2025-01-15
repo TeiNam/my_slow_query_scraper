@@ -10,10 +10,11 @@ import logging
 import sys
 import importlib
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
 from modules.mongodb_connector import MongoDBConnector
 from modules.common_logger import setup_logger
 from modules.time_utils import (
@@ -99,6 +100,15 @@ class QueryCollectorApp:
             description="Integrated API for collecting and monitoring slow queries",
             version="1.0.0",
             lifespan=self.lifespan
+        )
+
+        # CORS 미들웨어 추가
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # List[str]
+            allow_credentials=True,  # bool
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # List[str]
+            allow_headers=["*"],  # List[str]
         )
 
     @asynccontextmanager

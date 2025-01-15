@@ -2,19 +2,24 @@
 FastAPI endpoint for managing slow query monitoring
 """
 
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel
 import asyncio
-from typing import Optional, List
 import logging
-from datetime import datetime
 import pytz
+import json
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Response
+from typing import Optional, List
+from datetime import datetime
 from collectors.explain_collector import ExplainCollector
 from collectors.my_process_scraper import SlowQueryMonitor, initialize_monitors, run_monitors
 from modules.mongodb_connector import MongoDBConnector
 from configs.mongo_conf import mongo_settings
 from modules.common_logger import setup_logger
+import sqlparse
+from pydantic import BaseModel
+
+
+
 
 # 로깅 설정
 setup_logger()
@@ -25,6 +30,25 @@ monitor_running: bool = False
 monitoring_task: Optional[asyncio.Task] = None
 monitors: List[SlowQueryMonitor] = []
 
+class SlowQuery(BaseModel):
+    """Slow Query Data Model"""
+    pid: int
+    instance: str
+    db: str
+    user: str
+    host: str
+    time: float
+    sql_text: str
+    start: datetime
+    end: Optional[datetime]
+
+class SlowQueryResponse(BaseModel):
+    """Slow Query List Response Model"""
+    total: int
+    page: int
+    page_size: int
+    items: List[SlowQuery]
+
 class ExplainResponse(BaseModel):
     """Response model for explain collection results"""
     status: str
@@ -32,6 +56,12 @@ class ExplainResponse(BaseModel):
     pid: int
     instance_name: str
     timestamp: datetime
+
+class ExplainPlanResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[dict]
 
 class MonitorResponse(BaseModel):
     """Response model for monitor status"""
@@ -194,7 +224,7 @@ async def collect_query_explain(pid: int, background_tasks: BackgroundTasks):
         background_tasks.add_task(collector.collect_explain_by_pid, pid)
 
         return ExplainResponse(
-            status="processing",
+            status="The execution plan has been successfully saved.",
             message=f"Explain collection started for PID {pid}",
             pid=pid,
             instance_name=query_doc['instance'],
@@ -205,12 +235,13 @@ async def collect_query_explain(pid: int, background_tasks: BackgroundTasks):
         logger.error(f"Error collecting explain for PID {pid}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/mysql/explain/{pid}", response_model=ExplainResponse)
-async def get_explain_status(pid: int):
-    """Get status of execution plan collection for a specific PID"""
+
+@app.get("/mysql/explain/{pid}/markdown")
+async def get_explain_markdown(pid: int):
+    """Get explain data as markdown file"""
     try:
         mongodb_conn = await MongoDBConnector.get_database()
-        plan_collection = mongodb_conn[mongo_settings.MONGO_SLOW_LOG_PLAN_COLLECTION]
+        plan_collection = mongodb_conn[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_PLAN_COLLECTION]
         slow_query_collection = mongodb_conn[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION]
 
         query = await slow_query_collection.find_one({"pid": pid})
@@ -221,19 +252,163 @@ async def get_explain_status(pid: int):
             )
 
         plan = await plan_collection.find_one({"pid": pid})
-        status = "completed" if plan else "pending"
-        status_msg = "Explain collection completed" if plan else "Explain collection pending or in progress"
+        if not plan:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No explain plan found for PID {pid}"
+            )
 
-        return ExplainResponse(
-            status=status,
-            message=status_msg,
-            pid=pid,
-            instance_name=query['instance'],
-            timestamp=datetime.now(pytz.utc)
+        # SQL 포매팅
+        formatted_sql = sqlparse.format(
+            query['sql_text'],
+            reindent=True,
+            keyword_case='upper'
+        )
+
+        markdown_content = f"""### 인스턴스: {query['instance']}
+
+- 데이터베이스: {query['db']}
+- PID: {query['pid']}
+- 사용자: {query['user']}
+- 실행시간: {query['time']}
+
+- SQL TEXT:
+```sql
+{formatted_sql}
+```
+- Explain Tree:
+```tree
+{plan['explain_result']['tree']}
+```
+- Explain JSON:
+```json
+{json.dumps(plan['explain_result']['json'], indent=4)}
+"""
+        headers = {
+            'Content-Disposition': f'attachment; filename="Slow_Query_{pid}.md"'
+        }
+
+        return Response(
+            content=markdown_content,
+            media_type='text/markdown',
+            headers=headers
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error checking explain status for PID {pid}: {e}")
+        logger.error(f"Error generating markdown for PID {pid}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/mysql/queries", response_model=SlowQueryResponse)
+async def get_slow_queries(
+        page: int = Query(1, gt=0, description="페이지 번호"),
+        page_size: int = Query(20, gt=0, le=100, description="페이지당 항목 수"),
+        start_date: Optional[datetime] = Query(None, description="시작 날짜"),
+        end_date: Optional[datetime] = Query(None, description="종료 날짜"),
+        instance: Optional[str] = Query(None, description="인스턴스 이름")
+):
+    """
+    슬로우 쿼리 목록 조회
+    - 페이지네이션 지원
+    - 날짜 범위 필터링
+    - 인스턴스 필터링
+    """
+    try:
+        mongodb_conn = await MongoDBConnector.get_database()
+        collection = mongodb_conn[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION]
+
+        # 필터 조건 구성
+        filter_query = {}
+
+        if start_date or end_date:
+            date_filter = {}
+            if start_date:
+                date_filter["$gte"] = start_date
+            if end_date:
+                date_filter["$lte"] = end_date
+            if date_filter:
+                filter_query["start"] = date_filter
+
+        if instance:
+            filter_query["instance"] = instance
+
+        # 전체 문서 수 조회
+        total_count = await collection.count_documents(filter_query)
+
+        # 페이지네이션 적용하여 데이터 조회
+        skip = (page - 1) * page_size
+        cursor = collection.find(
+            filter_query,
+            {'_id': 0}  # _id 필드 제외
+        ).sort('start', -1).skip(skip).limit(page_size)
+
+        items = [SlowQuery(**doc) async for doc in cursor]
+
+        return SlowQueryResponse(
+            total=total_count,
+            page=page,
+            page_size=page_size,
+            items=items
+        )
+
+    except Exception as e:
+        logger.error(f"Error fetching slow queries: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/explain/plans", response_model=ExplainPlanResponse)
+async def get_explain_plans(
+       page: int = Query(1, gt=0, description="페이지 번호"),
+       page_size: int = Query(20, gt=0, le=100, description="페이지당 항목 수"),
+       start_date: Optional[datetime] = Query(None, description="시작 날짜"),
+       end_date: Optional[datetime] = Query(None, description="종료 날짜"),
+       instance: Optional[str] = Query(None, description="인스턴스 이름")
+):
+   """
+   실행 계획 목록 조회
+   - 페이지네이션 지원
+   - 날짜 범위 필터링
+   - 인스턴스 필터링
+   """
+   try:
+       mongodb_conn = await MongoDBConnector.get_database()
+       collection = mongodb_conn[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_PLAN_COLLECTION]
+
+       # 필터 조건 구성
+       filter_query = {}
+
+       if start_date or end_date:
+           date_filter = {}
+           if start_date:
+               date_filter["$gte"] = start_date
+           if end_date:
+               date_filter["$lte"] = end_date
+           if date_filter:
+               filter_query["created_at"] = date_filter
+
+       if instance:
+           filter_query["instance"] = instance
+
+       # 전체 문서 수 조회
+       total_count = await collection.count_documents(filter_query)
+
+       # 페이지네이션 적용하여 데이터 조회
+       skip = (page - 1) * page_size
+       cursor = collection.find(
+           filter_query,
+           {'_id': 0}  # _id 필드 제외
+       ).sort('created_at', -1).skip(skip).limit(page_size)
+
+       items = [doc async for doc in cursor]
+
+       return {
+           "total": total_count,
+           "page": page,
+           "page_size": page_size,
+           "items": items
+       }
+
+   except Exception as e:
+       logger.error(f"Error fetching explain plans: {e}")
+       raise HTTPException(status_code=500, detail=str(e))
