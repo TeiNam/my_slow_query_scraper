@@ -42,3 +42,19 @@ GET http://localhost:8000/explain/plans?page=0
 
 ### Invalid page size
 GET http://localhost:8000/explain/plans?page_size=101
+
+### RDS 인스턴스 수집 요청
+POST http://localhost:8000/collectors/rds-instances
+Content-Type: application/json
+
+### 수집된 RDS 인스턴스 목록 조회
+GET http://localhost:8000/rds-instances
+Content-Type: application/json
+
+### 프로덕션 환경 RDS 인스턴스 수집 요청
+POST https://api.example.com/collectors/rds-instances
+Content-Type: application/json
+
+### 프로덕션 환경 수집된 RDS 인스턴스 목록 조회
+GET https://api.example.com/rds-instances
+Content-Type: application/json
