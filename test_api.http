@@ -58,3 +58,34 @@ Content-Type: application/json
 ### 프로덕션 환경 수집된 RDS 인스턴스 목록 조회
 GET https://api.example.com/rds-instances
 Content-Type: application/json
+
+
+### 슬로우 쿼리 수집 시작 (날짜 범위)
+POST http://localhost:8000/cloudwatch/collect
+Content-Type: application/json
+
+{
+    "start_date": "2024-12-01",
+    "end_date": "2024-12-31"
+}
+
+### 슬로우 쿼리 조회 (기본)
+GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01
+
+### 슬로우 쿼리 조회 (특정 인스턴스)
+GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01&instance_id=your-instance-id
+
+### 슬로우 쿼리 조회 (페이징)
+GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01&page=1&page_size=10
+
+### 슬로우 쿼리 조회 (모든 파라미터 사용)
+GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01&instance_id=your-instance-id&page=1&page_size=10
+
+### 잘못된 날짜 형식 테스트
+GET http://localhost:8000/cloudwatch/queries?start_date=2024-12-01&end_date=2024-12-31
+
+### 잘못된 날짜 범위 테스트
+GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-02&end_date=2025-01-01
+
+### 잘못된 페이지 번호 테스트
+GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01&page=0
