@@ -176,7 +176,7 @@ async def run_collection(
 
         try:
             await collector.initialize()
-            total_instances = len(collector._target_instances)
+            total_instances = len(collector.target_instances)
 
             await collector.collect_metrics_by_range(
                 start_date,

@@ -42,7 +42,7 @@ class RDSCloudWatchSlowQueryCollector:
             r"(?P<query>.*?)(?=# User@Host:|$)",
             re.DOTALL
         )
-        self._target_instances: Optional[List[str]] = None
+        self.target_instances: Optional[List[str]] = None
 
     @property
     def collection_name(self) -> str:
@@ -53,10 +53,10 @@ class RDSCloudWatchSlowQueryCollector:
         """초기화 작업 수행"""
         # 모든 인스턴스 로드
         instances = await self._instance_loader.load_all_instances()
-        self._target_instances = [inst['instance_name'] for inst in instances]
+        self.target_instances = [inst['instance_name'] for inst in instances]
 
-        if self._target_instances:
-            logger.info(f"수집 대상 인스턴스: {', '.join(self._target_instances)}")
+        if self.target_instances:
+            logger.info(f"수집 대상 인스턴스: {', '.join(self.target_instances)}")
         else:
             logger.warning("수집 대상 인스턴스가 설정되지 않았습니다.")
 
@@ -310,7 +310,7 @@ class RDSCloudWatchSlowQueryCollector:
             Dict[str, List[Dict]]: 인스턴스별 수집된 슬로우 쿼리
         """
         try:
-            if not self._target_instances:
+            if not self.target_instances:
                 await callback(0, "수집 대상 인스턴스가 없습니다")
                 return {}
 
@@ -322,7 +322,7 @@ class RDSCloudWatchSlowQueryCollector:
             all_instances = await self._instance_loader.load_all_instances()
             target_instances = [
                 inst for inst in all_instances
-                if inst['instance_name'] in self._target_instances and inst.get('region')
+                if inst['instance_name'] in self.target_instances and inst.get('region')
             ]
 
             if not target_instances:
