@@ -10,7 +10,7 @@ Accept: application/json
 
 ### 존재하지 않는 기간의 데이터 조회 (404 테스트)
 # MongoDB에서 해당 기간의 데이터를 삭제 후 테스트
-GET {{host}}/api/{{api_version}}/cw-slowquery/digest/stats
+GET {{host}}/cw-slowquery/digest/summary
 Accept: application/json
 
 ### 응답 예시
