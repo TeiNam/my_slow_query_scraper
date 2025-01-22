@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from typing import Tuple, Optional
+import uuid
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket
 from pydantic import BaseModel
@@ -46,86 +47,94 @@ async def websocket_endpoint(websocket: WebSocket, collection_id: str):
         await websocket_manager.connect(websocket, collection_id)
         while True:
             try:
-                await websocket.receive_text()
+                message = await websocket.receive_text()
+                if message == "ping":
+                    await websocket.send_text("pong")
             except Exception:
                 break
     finally:
         await websocket_manager.disconnect(websocket, collection_id)
 
+
 @app.post("/cloudwatch/run", response_model=CollectionResponse)
 async def run_last_month_collection(
-    background_tasks: BackgroundTasks
+        background_tasks: BackgroundTasks
 ) -> CollectionResponse:
     """전월 CloudWatch 슬로우 쿼리 수집 실행"""
+
+    # MongoDB 초기 연결
+    await MongoDBConnector.initialize()
+
     try:
-        await MongoDBConnector.initialize()
+        # RDS 인스턴스 목록 조회
+        db = await MongoDBConnector.get_database()
+        instance_collection = db[mongo_settings.MONGO_RDS_INSTANCE_COLLECTION]
 
-        try:
-            # RDS 인스턴스 목록 조회
-            db = await MongoDBConnector.get_database()
-            instance_collection = db[mongo_settings.MONGO_RDS_INSTANCE_COLLECTION]
+        cursor = instance_collection.find()
+        instances = await cursor.to_list(length=None)
 
-            cursor = instance_collection.find()
-            instances = await cursor.to_list(length=None)
+        # MongoDB 연결 종료 (인스턴스 조회 후)
+        await MongoDBConnector.close()
 
-            if not instances:
-                raise HTTPException(
-                    status_code=404,
-                    detail="수집 대상 인스턴스가 없습니다."
-                )
-
-            # 전월 날짜 범위 계산 (KST 기준)
-            start_datetime, end_datetime = get_last_month_range()
-            collection_id = f"collect_{start_datetime.strftime('%Y%m')}"
-
-            target_instances = [inst.get("instance_name", inst.get("_id")) for inst in instances]
-
-            # 수집 시작 상태 업데이트
-            await websocket_manager.update_status(
-                collection_id=collection_id,
-                status="started",
-                details={
-                    "start_date": format_kst(start_datetime),
-                    "end_date": format_kst(end_datetime),
-                    "target_instances": target_instances,
-                    "instance_count": len(target_instances)
-                }
+        if not instances:
+            raise HTTPException(
+                status_code=404,
+                detail="수집 대상 인스턴스가 없습니다."
             )
 
-            await websocket_manager.broadcast_log(
-                collection_id=collection_id,
-                message=(
-                    f"전월 데이터 수집 시작\n"
-                    f"기간: {format_kst(start_datetime)} ~ {format_kst(end_datetime)}\n"
-                    f"대상 인스턴스: {len(target_instances)}개"
-                )
-            )
+        # 전월 날짜 범위 계산 (KST 기준)
+        start_datetime, end_datetime = get_last_month_range()
 
-            # 백그라운드 작업 시작
-            background_tasks.add_task(
-                run_collection,
-                start_datetime,
-                end_datetime,
-                collection_id
-            )
+        # UUID를 사용하여 고유한 collection_id 생성
+        collection_id = f"collect_{uuid.uuid4()}"
 
-            return CollectionResponse(
-                status="started",
-                message=(
-                    f"전월({start_datetime.strftime('%Y-%m')}) "
-                    f"슬로우 쿼리 수집이 시작되었습니다. "
-                    f"대상 인스턴스: {len(target_instances)}개"
-                ),
-                target_date=(
-                    f"{start_datetime.strftime('%Y-%m-%d')} ~ "
-                    f"{end_datetime.strftime('%Y-%m-%d')}"
-                ),
-                timestamp=get_current_kst(),
-                collection_id=collection_id
-            )
+        target_instances = [inst.get("instance_name", inst.get("_id")) for inst in instances]
 
-        finally:
-            await MongoDBConnector.close()
+        # 수집 시작 상태 업데이트
+        await websocket_manager.update_status(
+            collection_id=collection_id,
+            status="started",
+            details={
+                "start_date": format_kst(start_datetime),
+                "end_date": format_kst(end_datetime),
+                "target_instances": target_instances,
+                "instance_count": len(target_instances),
+                "collection_month": start_datetime.strftime('%Y-%m')
+            }
+        )
+
+        await websocket_manager.broadcast_log(
+            collection_id=collection_id,
+            message=(
+                f"전월 데이터 수집 시작\n"
+                f"기간: {format_kst(start_datetime)} ~ {format_kst(end_datetime)}\n"
+                f"대상 인스턴스: {len(target_instances)}개"
+            )
+        )
+
+        # 백그라운드 작업 시작
+        background_tasks.add_task(
+            run_collection,
+            start_datetime,
+            end_datetime,
+            collection_id,
+            instances  # instances 데이터를 직접 전달
+        )
+
+        return CollectionResponse(
+            status="started",
+            message=(
+                f"전월({start_datetime.strftime('%Y-%m')}) "
+                f"슬로우 쿼리 수집이 시작되었습니다. "
+                f"대상 인스턴스: {len(target_instances)}개"
+            ),
+            target_date=(
+                f"{start_datetime.strftime('%Y-%m-%d')} ~ "
+                f"{end_datetime.strftime('%Y-%m-%d')}"
+            ),
+            timestamp=get_current_kst(),
+            collection_id=collection_id
+        )
 
     except HTTPException:
         raise
@@ -133,20 +142,21 @@ async def run_last_month_collection(
         logger.error(f"전월 데이터 수집 시작 중 오류 발생: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 async def run_collection(
-    start_date: datetime,
-    end_date: datetime,
-    collection_id: str
+        start_date: datetime,
+        end_date: datetime,
+        collection_id: str,
+        instances: list  # instances 데이터 받기
 ) -> None:
     """날짜 범위 수집 실행"""
     try:
         await MongoDBConnector.initialize()
         collector = RDSCloudWatchSlowQueryCollector()
-        db = await MongoDBConnector.get_database()
 
         total_queries = 0
         processed_instances = 0
-        total_instances = 0
+        total_instances = len(instances)  # 전달받은 instances 사용
         error_message = None
 
         # 수집 상태 업데이트를 위한 콜백 함수
@@ -176,7 +186,6 @@ async def run_collection(
 
         try:
             await collector.initialize()
-            total_instances = len(collector.target_instances)
 
             await collector.collect_metrics_by_range(
                 start_date,
@@ -213,6 +222,9 @@ async def run_collection(
                 )
             )
 
+            # 작업 완료 후 cleanup 예약
+            await websocket_manager.schedule_cleanup(collection_id)
+
         except Exception as e:
             error_message = str(e)
             await websocket_manager.update_status(
@@ -229,6 +241,8 @@ async def run_collection(
                 message=f"수집 중 오류 발생: {error_message}",
                 level="error"
             )
+            # 에러 발생 시에도 cleanup 예약
+            await websocket_manager.schedule_cleanup(collection_id)
             raise
 
     except Exception as e:
