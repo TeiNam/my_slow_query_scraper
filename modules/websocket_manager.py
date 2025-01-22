@@ -24,9 +24,11 @@ class WebSocketManager:
             self._connections[collection_id] = set()
         self._connections[collection_id].add(websocket)
 
-        # 현재 상태 전송
+        # 현재 상태 전송 - 직렬화 처리 추가
         if collection_id in self._collection_status:
-            await websocket.send_json(self._collection_status[collection_id])
+            # 상태 데이터를 전송하기 전에 직렬화
+            serialized_status = self._serialize_dict(self._collection_status[collection_id])
+            await websocket.send_json(serialized_status)
 
     async def disconnect(self, websocket: WebSocket, collection_id: str):
         """웹소켓 연결 제거"""
@@ -47,10 +49,13 @@ class WebSocketManager:
 
     async def update_status(self, collection_id: str, status: str, details: Dict = None):
         """수집 상태 업데이트 및 브로드캐스팅"""
+        details = details or {}
+
+        # Convert datetime objects to ISO format strings
         status_data = {
             "type": "status",
             "status": status,
-            "details": details or {},
+            "details": self._serialize_dict(details),
             "timestamp": datetime.now().isoformat()
         }
 
@@ -58,13 +63,27 @@ class WebSocketManager:
         if collection_id in self._connections:
             await self._broadcast(collection_id, status_data)
 
+    def _serialize_dict(self, data: Dict) -> Dict:
+        """Convert datetime objects to ISO format strings in a dictionary"""
+        serialized = {}
+        for key, value in data.items():
+            if isinstance(value, datetime):
+                serialized[key] = value.isoformat()
+            elif isinstance(value, dict):
+                serialized[key] = self._serialize_dict(value)
+            else:
+                serialized[key] = value
+        return serialized
+
     async def _broadcast(self, collection_id: str, message: Dict):
         """특정 수집 ID의 모든 연결에 메시지 전송"""
         if collection_id in self._connections:
             dead_connections = set()
             for connection in self._connections[collection_id]:
                 try:
-                    await connection.send_json(message)
+                    # Ensure message is JSON serializable
+                    serialized_message = self._serialize_dict(message)
+                    await connection.send_json(serialized_message)
                 except Exception as e:
                     logger.error(f"Failed to send message: {e}")
                     dead_connections.add(connection)
