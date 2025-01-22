@@ -1,0 +1,35 @@
+# CloudWatch 슬로우 쿼리 다이제스트 API 테스트
+
+### 환경 변수 설정
+@host = http://localhost:8000
+@api_version = v1
+
+### 슬로우 쿼리 통계 조회
+GET {{host}}/cw-slowquery/digest/stats
+Accept: application/json
+
+### 존재하지 않는 기간의 데이터 조회 (404 테스트)
+# MongoDB에서 해당 기간의 데이터를 삭제 후 테스트
+GET {{host}}/api/{{api_version}}/cw-slowquery/digest/stats
+Accept: application/json
+
+### 응답 예시
+# {
+#   "month": "2024-12",
+#   "stats": [
+#     {
+#       "instance_id": "prd-orderservice-read-lookup-instance-1",
+#       "digest_query": "SELECT...",
+#       "avg_stats": {
+#         "avg_lock_time": 0.000003,
+#         "avg_rows_examined": 4821.0,
+#         "avg_rows_sent": 4821.0,
+#         "avg_time": 1.033078
+#       },
+#       "sum_stats": {
+#         "execution_count": 1,
+#         "total_time": 1.033078
+#       }
+#     }
+#   ]
+# }
