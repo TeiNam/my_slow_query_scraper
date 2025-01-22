@@ -25,7 +25,7 @@ class MongoSettings(BaseSettings):
 
     # 컬렉션 이름 설정
     MONGO_RDS_INSTANCE_COLLECTION: str = config.get(
-        "MONGO_RDS_MYSQL_INSTANCE_COLLECTION", "rds_mysql_instance"
+        "MONGO_RDS_INSTANCE_COLLECTION", "rds_mysql_instance"
     )
     MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION: str = config.get(
         "MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION", "rds_mysql_realtime_slow_query"

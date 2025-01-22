@@ -89,3 +89,6 @@ GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-02&end_date=2025
 
 ### 잘못된 페이지 번호 테스트
 GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01&page=0
+
+
+<!DOCTYPE html>

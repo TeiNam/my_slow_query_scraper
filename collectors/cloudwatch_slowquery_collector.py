@@ -1,17 +1,18 @@
 # collectors/cloudwatch_slowquery_collector.py
 
+import asyncio
 import logging
 import re
-import os
 import sys
-import pytz
-import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple, Pattern
-from modules.load_instance import InstanceLoader
-from modules.aws_session_manager import aws_session
-from modules.mongodb_connector import MongoDBConnector
+from typing import Dict, List, Optional, Tuple, Pattern
+
+import pytz
+
 from configs.mongo_conf import mongo_settings
+from modules.aws_session_manager import aws_session
+from modules.load_instance import InstanceLoader
+from modules.mongodb_connector import MongoDBConnector
 
 # 로깅 설정
 logging.basicConfig(
@@ -77,8 +78,9 @@ class RDSCloudWatchSlowQueryCollector:
             utc_end = end_date.astimezone(pytz.UTC)
 
             logger.info(
-                f"로그 조회 시작 - UTC 시간: {utc_start.strftime('%Y-%m-%d %H:%M:%S')} ~ "
-                f"{utc_end.strftime('%Y-%m-%d %H:%M:%S')}"
+                f"[{instance_name}] 슬로우 쿼리 조회 시작: "
+                f"{utc_start.strftime('%Y-%m-%d %H:%M:%S')} ~ "
+                f"{utc_end.strftime('%Y-%m-%d %H:%M:%S')} (UTC)"
             )
 
             try:
@@ -90,12 +92,15 @@ class RDSCloudWatchSlowQueryCollector:
                     limit=50
                 )
             except Exception as e:
-                logger.warning(f"로그 스트림 조회 실패 ({log_group_name}): {e}")
+                if "ResourceNotFoundException" in str(e):
+                    logger.info(f"[{instance_name}] 슬로우 쿼리 로그 없음")
+                else:
+                    logger.warning(f"[{instance_name}] 로그 스트림 조회 실패: {e}")
                 return []
 
             log_streams = streams_response.get('logStreams', [])
             if not log_streams:
-                logger.info(f"로그 스트림이 없습니다: {log_group_name}")
+                logger.info(f"[{instance_name}] 슬로우 쿼리 로그가 없습니다")
                 return []
 
             async def process_stream(stream: Dict) -> List[Dict]:
@@ -108,8 +113,8 @@ class RDSCloudWatchSlowQueryCollector:
                         params = {
                             'logGroupName': log_group_name,
                             'logStreamName': stream['logStreamName'],
-                            'startTime': int(utc_start.timestamp() * 1000),  # UTC 시간으로 변경
-                            'endTime': int(utc_end.timestamp() * 1000),  # UTC 시간으로 변경
+                            'startTime': int(utc_start.timestamp() * 1000),
+                            'endTime': int(utc_end.timestamp() * 1000),
                             'limit': batch_size
                         }
 
@@ -130,17 +135,17 @@ class RDSCloudWatchSlowQueryCollector:
                                 len(stream_events) >= batch_size):
                             break
 
-                        # 메모리 사용량 모니터링
                         if len(stream_events) > batch_size * 2:
                             logger.warning(
-                                f"스트림 {stream['logStreamName']}의 "
+                                f"[{instance_name}] 스트림 {stream['logStreamName']}의 "
                                 f"이벤트가 많습니다. 처리를 중단합니다."
                             )
                             break
 
                     except Exception as e:
                         logger.error(
-                            f"스트림 {stream['logStreamName']} 처리 중 오류 발생: {e}"
+                            f"[{instance_name}] 스트림 {stream['logStreamName']} "
+                            f"처리 중 오류 발생: {e}"
                         )
                         break
 
@@ -157,27 +162,30 @@ class RDSCloudWatchSlowQueryCollector:
 
                     for result in batch_results:
                         if isinstance(result, Exception):
-                            logger.error(f"스트림 처리 중 오류 발생: {result}")
+                            logger.error(f"[{instance_name}] 스트림 처리 중 오류 발생: {result}")
                             continue
                         if isinstance(result, list):
                             all_events.extend(result)
                         else:
-                            logger.error(f"예상치 못한 결과 타입: {type(result)}")
+                            logger.error(f"[{instance_name}] 예상치 못한 결과 타입: {type(result)}")
                 except Exception as e:
-                    logger.error(f"배치 처리 중 오류 발생: {e}")
+                    logger.error(f"[{instance_name}] 배치 처리 중 오류 발생: {e}")
                     continue
 
             # 시간순 정렬
             all_events.sort(key=lambda x: x.get('timestamp', 0))
 
-            logger.info(
-                f"총 {len(all_events)}개의 로그 이벤트 수집 완료 "
-                f"(스트림 {len(log_streams)}개)"
-            )
+            if all_events:
+                logger.info(
+                    f"[{instance_name}] {len(all_events)}개의 슬로우 쿼리 수집 완료"
+                )
+            else:
+                logger.info(f"[{instance_name}] 수집된 슬로우 쿼리가 없습니다")
+
             return all_events
 
         except Exception as e:
-            logger.error(f"로그 조회 중 오류 발생: {e}")
+            logger.error(f"[{instance_name}] 로그 조회 중 오류 발생: {e}")
             return []
 
     def _analyze_slow_queries(self, logs: List[Dict]) -> List[Dict]:
@@ -286,6 +294,7 @@ class RDSCloudWatchSlowQueryCollector:
             self,
             start_date: datetime,
             end_date: datetime,
+            callback,
             chunk_size: int = 5
     ) -> Dict[str, List[Dict]]:
         """
@@ -294,6 +303,7 @@ class RDSCloudWatchSlowQueryCollector:
         Args:
             start_date (datetime): 수집 시작일
             end_date (datetime): 수집 종료일
+            callback: 진행 상황 업데이트 콜백 함수
             chunk_size (int): 동시 처리할 인스턴스 수
 
         Returns:
@@ -301,12 +311,12 @@ class RDSCloudWatchSlowQueryCollector:
         """
         try:
             if not self._target_instances:
-                logger.warning("수집 대상 인스턴스가 없습니다")
+                await callback(0, "수집 대상 인스턴스가 없습니다")
                 return {}
 
-            logger.info(
-                f"슬로우 쿼리 수집 시작 - "
-                f"기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
+            await callback(
+                5,
+                f"슬로우 쿼리 수집 시작 - 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
             )
 
             all_instances = await self._instance_loader.load_all_instances()
@@ -316,17 +326,26 @@ class RDSCloudWatchSlowQueryCollector:
             ]
 
             if not target_instances:
-                logger.warning("유효한 수집 대상 인스턴스가 없습니다")
+                await callback(0, "유효한 수집 대상 인스턴스가 없습니다")
                 return {}
 
             # 인스턴스 청크 단위로 병렬 처리
             instances_data = {}
-            for i in range(0, len(target_instances), chunk_size):
+            total_instances = len(target_instances)
+            processed_instances = 0
+
+            for i in range(0, total_instances, chunk_size):
                 chunk = target_instances[i:i + chunk_size]
+                chunk_size = len(chunk)
 
                 async def process_instance(instance: Dict) -> Tuple[str, List[Dict]]:
                     """단일 인스턴스 처리"""
                     try:
+                        await callback(
+                            None,
+                            f"인스턴스 {instance['instance_name']} 처리 시작"
+                        )
+
                         logs = await self._get_slow_query_logs(
                             instance_name=instance['instance_name'],
                             region=instance['region'],
@@ -335,25 +354,27 @@ class RDSCloudWatchSlowQueryCollector:
                         )
 
                         if not logs:
-                            logger.info(
-                                f"- {instance['instance_name']}: "
-                                f"수집된 슬로우 쿼리 없음"
+                            await callback(
+                                None,
+                                f"- {instance['instance_name']}: 수집된 슬로우 쿼리 없음"
                             )
                             return instance['instance_name'], []
 
                         analyzed_queries = self._analyze_slow_queries(logs)
                         if analyzed_queries:
-                            logger.info(
-                                f"✓ {instance['instance_name']}: "
-                                f"{len(analyzed_queries)}개의 슬로우 쿼리 분석 완료"
+                            await callback(
+                                None,
+                                f"✓ {instance['instance_name']}: {len(analyzed_queries)}개의 슬로우 쿼리 분석 완료"
                             )
                             return instance['instance_name'], analyzed_queries
 
                         return instance['instance_name'], []
 
                     except Exception as e:
-                        logger.error(
-                            f"인스턴스 {instance['instance_name']} 처리 중 오류: {e}"
+                        await callback(
+                            None,
+                            f"인스턴스 {instance['instance_name']} 처리 중 오류: {str(e)}",
+                            "error"
                         )
                         return instance['instance_name'], []
 
@@ -364,34 +385,52 @@ class RDSCloudWatchSlowQueryCollector:
                     for instance_name, queries in results:
                         if queries:
                             instances_data[instance_name] = queries
+
+                    processed_instances += chunk_size
+                    progress = (processed_instances / total_instances) * 80  # 전체 진행률의 80%
+                    await callback(progress, f"인스턴스 처리 진행률: {processed_instances}/{total_instances}")
+
                 except Exception as e:
-                    logger.error(f"청크 처리 중 오류 발생: {e}")
+                    await callback(None, f"청크 처리 중 오류 발생: {str(e)}", "error")
                     continue
 
             if not instances_data:
-                logger.warning("수집된 슬로우 쿼리가 없습니다")
+                await callback(80, "수집된 슬로우 쿼리가 없습니다")
                 return {}
 
             # 날짜별 데이터 저장
             current_date = start_date
+            total_days = (end_date - start_date).days + 1
+            days_processed = 0
+
             while current_date <= end_date:
                 try:
                     await self._save_metrics(
                         instances_data=instances_data,
                         target_date=current_date.date()
                     )
-                    logger.info(f"{current_date.strftime('%Y-%m-%d')} 데이터 저장 완료")
-                except Exception as e:
-                    logger.error(
-                        f"{current_date.strftime('%Y-%m-%d')} "
-                        f"데이터 저장 중 오류: {e}"
+
+                    days_processed += 1
+                    progress = 80 + (days_processed / total_days) * 20  # 나머지 20% 진행률
+
+                    await callback(
+                        progress,
+                        f"{current_date.strftime('%Y-%m-%d')} 데이터 저장 완료 "
+                        f"({days_processed}/{total_days})"
                     )
+
+                except Exception as e:
+                    error_msg = f"{current_date.strftime('%Y-%m-%d')} 데이터 저장 중 오류: {str(e)}"
+                    await callback(None, error_msg, "error")
+
                 current_date += timedelta(days=1)
 
+            await callback(100, "전체 수집 및 저장 완료")
             return instances_data
 
         except Exception as e:
-            logger.error(f"슬로우 쿼리 수집 중 오류 발생: {e}")
+            error_msg = f"슬로우 쿼리 수집 중 오류 발생: {str(e)}"
+            await callback(None, error_msg, "error")
             raise
 
     async def _save_metrics(

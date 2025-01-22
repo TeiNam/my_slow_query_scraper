@@ -3,10 +3,13 @@ anyio==4.8.0
 asyncmy==0.2.10
 boto3==1.35.93
 botocore==1.35.93
+certifi==2024.12.14
 click==8.1.8
 dnspython==2.7.0
 fastapi==0.115.6
 h11==0.14.0
+httpcore==1.0.7
+httpx==0.28.1
 idna==3.10
 jmespath==1.0.1
 motor==3.6.0

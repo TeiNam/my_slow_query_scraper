@@ -1,31 +1,23 @@
 """
-FastAPI endpoint for managing CloudWatch slow query collection
+FastAPI endpoint for CloudWatch slow query collection
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel, validator
-from datetime import datetime, date, time, timedelta
-import pytz
-from typing import Optional, Dict, List, Tuple
 import logging
-from modules.mongodb_connector import MongoDBConnector
+import re
+from datetime import datetime, timedelta
+from typing import Tuple, Optional
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket
+from pydantic import BaseModel
+
 from collectors.cloudwatch_slowquery_collector import RDSCloudWatchSlowQueryCollector
+from configs.mongo_conf import mongo_settings
+from modules.mongodb_connector import MongoDBConnector
+from modules.time_utils import get_current_kst, format_kst
+from modules.websocket_manager import websocket_manager
 
 # 로깅 설정
 logger = logging.getLogger(__name__)
-kst = pytz.timezone('Asia/Seoul')
-
-class DateRangeRequest(BaseModel):
-    """날짜 범위 수집 요청 모델"""
-    start_date: date
-    end_date: date
-
-    @validator('end_date')
-    def validate_date_range(cls, end_date, values):
-        """날짜 범위 유효성 검증"""
-        if 'start_date' in values and end_date < values['start_date']:
-            raise ValueError("종료일이 시작일보다 이전일 수 없습니다")
-        return end_date
 
 class CollectionResponse(BaseModel):
     """수집 응답 모델"""
@@ -33,206 +25,215 @@ class CollectionResponse(BaseModel):
     message: str
     target_date: str
     timestamp: datetime
-
-class SlowQueryData(BaseModel):
-    """슬로우 쿼리 데이터 모델"""
-    date: str
-    instance_id: str
-    digest_query: str
-    execution_count: int
-    avg_time: float
-    total_time: float
-    avg_lock_time: float
-    avg_rows_sent: float
-    avg_rows_examined: float
-    users: List[str]
-    hosts: List[str]
-    first_seen: str
-    last_seen: str
-
-class SlowQueryResponse(BaseModel):
-    """슬로우 쿼리 조회 응답 모델"""
-    queries: List[SlowQueryData]
-    total_count: int
-    page: int
-    page_size: int
+    collection_id: str
 
 app = FastAPI(title="CloudWatch Slow Query Collector")
 
-@app.post("/cloudwatch/collect", response_model=CollectionResponse)
-async def start_collection(
-    request: DateRangeRequest,
+def get_last_month_range() -> Tuple[datetime, datetime]:
+    """전월의 시작일과 종료일 계산 (KST 기준)"""
+    current_kst = get_current_kst()
+    first_day_current_month = current_kst.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    last_month_first_day = (first_day_current_month - timedelta(days=1)).replace(day=1)
+    next_month = (last_month_first_day + timedelta(days=32)).replace(day=1)
+    last_month_last_day = next_month - timedelta(seconds=1)
+
+    return last_month_first_day, last_month_last_day
+
+@app.websocket("/ws/collection/{collection_id}")
+async def websocket_endpoint(websocket: WebSocket, collection_id: str):
+    """웹소켓 연결 엔드포인트"""
+    try:
+        await websocket_manager.connect(websocket, collection_id)
+        while True:
+            try:
+                await websocket.receive_text()
+            except Exception:
+                break
+    finally:
+        await websocket_manager.disconnect(websocket, collection_id)
+
+@app.post("/cloudwatch/run", response_model=CollectionResponse)
+async def run_last_month_collection(
     background_tasks: BackgroundTasks
 ) -> CollectionResponse:
-    """
-    날짜 범위 기준 CloudWatch 슬로우 쿼리 수집 시작
-
-    Args:
-        request: 날짜 범위 수집 요청 정보
-        background_tasks: FastAPI 백그라운드 태스크
-
-    Returns:
-        CollectionResponse: 수집 시작 결과
-    """
+    """전월 CloudWatch 슬로우 쿼리 수집 실행"""
     try:
-        # 시작일과 종료일에 시간 정보 추가
-        start_datetime = datetime.combine(request.start_date, datetime.min.time())
-        end_datetime = datetime.combine(request.end_date, datetime.max.time())
+        await MongoDBConnector.initialize()
 
-        # KST 타임존 적용
-        start_datetime = start_datetime.replace(tzinfo=kst)
-        end_datetime = end_datetime.replace(tzinfo=kst)
-
-        # 백그라운드에서 수집 작업 실행
-        background_tasks.add_task(
-            run_collection,
-            start_datetime,
-            end_datetime
-        )
-
-        return CollectionResponse(
-            status="started",
-            message=(
-                f"Collection started for date range: "
-                f"{request.start_date.strftime('%Y-%m-%d')} ~ "
-                f"{request.end_date.strftime('%Y-%m-%d')}"
-            ),
-            target_date=(
-                f"{request.start_date.strftime('%Y-%m-%d')} ~ "
-                f"{request.end_date.strftime('%Y-%m-%d')}"
-            ),
-            timestamp=datetime.now(kst)
-        )
-
-    except Exception as e:
-        logger.error(f"Error starting collection: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/cloudwatch/queries", response_model=SlowQueryResponse)
-async def get_slow_queries(
-    start_date: str,
-    end_date: str,
-    instance_id: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 20
-) -> SlowQueryResponse:
-    """
-    수집된 슬로우 쿼리 데이터 조회
-
-    Args:
-        start_date (str): 시작일 (YYYY-MM-DD)
-        end_date (str): 종료일 (YYYY-MM-DD)
-        instance_id (str, optional): 인스턴스 ID
-        page (int): 페이지 번호 (기본값: 1)
-        page_size (int): 페이지 크기 (기본값: 20)
-
-    Returns:
-        SlowQueryResponse: 슬로우 쿼리 데이터 목록
-    """
-    try:
-        # 날짜 형식 검증
         try:
-            start = datetime.strptime(start_date, '%Y-%m-%d')
-            end = datetime.strptime(end_date, '%Y-%m-%d')
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid date format. Use YYYY-MM-DD"
+            # RDS 인스턴스 목록 조회
+            db = await MongoDBConnector.get_database()
+            instance_collection = db[mongo_settings.MONGO_RDS_INSTANCE_COLLECTION]
+
+            cursor = instance_collection.find()
+            instances = await cursor.to_list(length=None)
+
+            if not instances:
+                raise HTTPException(
+                    status_code=404,
+                    detail="수집 대상 인스턴스가 없습니다."
+                )
+
+            # 전월 날짜 범위 계산 (KST 기준)
+            start_datetime, end_datetime = get_last_month_range()
+            collection_id = f"collect_{start_datetime.strftime('%Y%m')}"
+
+            target_instances = [inst.get("instance_name", inst.get("_id")) for inst in instances]
+
+            # 수집 시작 상태 업데이트
+            await websocket_manager.update_status(
+                collection_id=collection_id,
+                status="started",
+                details={
+                    "start_date": format_kst(start_datetime),
+                    "end_date": format_kst(end_datetime),
+                    "target_instances": target_instances,
+                    "instance_count": len(target_instances)
+                }
             )
 
-        # 날짜 범위 검증
-        if end < start:
-            raise HTTPException(
-                status_code=400,
-                detail="End date must be greater than or equal to start date"
+            await websocket_manager.broadcast_log(
+                collection_id=collection_id,
+                message=(
+                    f"전월 데이터 수집 시작\n"
+                    f"기간: {format_kst(start_datetime)} ~ {format_kst(end_datetime)}\n"
+                    f"대상 인스턴스: {len(target_instances)}개"
+                )
             )
 
-        # MongoDB 쿼리 필터 생성
-        query_filter = {
-            "date": {
-                "$gte": start_date,
-                "$lte": end_date
-            }
-        }
-        if instance_id:
-            query_filter["instance_id"] = instance_id
+            # 백그라운드 작업 시작
+            background_tasks.add_task(
+                run_collection,
+                start_datetime,
+                end_datetime,
+                collection_id
+            )
 
-        # MongoDB에서 데이터 조회
-        db = await MongoDBConnector.get_database()
-        collection = db[RDSCloudWatchSlowQueryCollector().collection_name]
+            return CollectionResponse(
+                status="started",
+                message=(
+                    f"전월({start_datetime.strftime('%Y-%m')}) "
+                    f"슬로우 쿼리 수집이 시작되었습니다. "
+                    f"대상 인스턴스: {len(target_instances)}개"
+                ),
+                target_date=(
+                    f"{start_datetime.strftime('%Y-%m-%d')} ~ "
+                    f"{end_datetime.strftime('%Y-%m-%d')}"
+                ),
+                timestamp=get_current_kst(),
+                collection_id=collection_id
+            )
 
-        # 전체 건수 조회
-        total_count = await collection.count_documents(query_filter)
+        finally:
+            await MongoDBConnector.close()
 
-        ## 페이징 처리 - 정렬 조건 수정
-        skip = (page - 1) * page_size
-        cursor = collection.find(query_filter) \
-            .sort([
-                ("date", 1),             # date 기준 오름차순
-                ("created_at", -1)       # created_at 기준 내림차순
-            ]) \
-            .skip(skip) \
-            .limit(page_size)
-
-        queries = []
-        async for doc in cursor:
-            queries.append(SlowQueryData(
-                date=doc["date"],
-                instance_id=doc["instance_id"],
-                digest_query=doc["digest_query"],
-                execution_count=doc["execution_count"],
-                avg_time=doc["avg_time"],
-                total_time=doc["total_time"],
-                avg_lock_time=doc["avg_lock_time"],
-                avg_rows_sent=doc["avg_rows_sent"],
-                avg_rows_examined=doc["avg_rows_examined"],
-                users=doc["users"],
-                hosts=doc["hosts"],
-                first_seen=doc["first_seen"],
-                last_seen=doc["last_seen"]
-            ))
-
-        return SlowQueryResponse(
-            queries=queries,
-            total_count=total_count,
-            page=page,
-            page_size=page_size
-        )
-
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error fetching slow queries: {e}")
+        logger.error(f"전월 데이터 수집 시작 중 오류 발생: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def run_collection(start_date: datetime, end_date: datetime) -> None:
-    """
-    날짜 범위 수집 실행
-
-    Args:
-        start_date (datetime): 수집 시작일
-        end_date (datetime): 수집 종료일
-    """
+async def run_collection(
+    start_date: datetime,
+    end_date: datetime,
+    collection_id: str
+) -> None:
+    """날짜 범위 수집 실행"""
     try:
         await MongoDBConnector.initialize()
         collector = RDSCloudWatchSlowQueryCollector()
-        await collector.initialize()
+        db = await MongoDBConnector.get_database()
+
+        total_queries = 0
+        processed_instances = 0
+        total_instances = 0
+        error_message = None
+
+        # 수집 상태 업데이트를 위한 콜백 함수
+        async def progress_callback(progress: Optional[float], message: Optional[str], level: str = "info"):
+            nonlocal total_queries, processed_instances
+            if message and "슬로우 쿼리 분석 완료" in message:
+                processed_instances += 1
+                if match := re.search(r'(\d+)개의 슬로우 쿼리', message):
+                    total_queries += int(match.group(1))
+
+            await websocket_manager.update_status(
+                collection_id=collection_id,
+                status="in_progress",
+                details={
+                    "progress": progress if progress is not None else 0,
+                    "message": message,
+                    "processed_instances": processed_instances,
+                    "total_queries": total_queries
+                }
+            )
+            if message:
+                await websocket_manager.broadcast_log(
+                    collection_id=collection_id,
+                    message=message,
+                    level=level
+                )
 
         try:
-            await collector.collect_metrics_by_range(start_date, end_date)
+            await collector.initialize()
+            total_instances = len(collector._target_instances)
 
-            logger.info(
-                f"날짜 범위 수집 완료: "
-                f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
+            await collector.collect_metrics_by_range(
+                start_date,
+                end_date,
+                progress_callback
+            )
+
+            # 수집 완료 상태 및 결과 전송
+            result_details = {
+                "status": "completed",
+                "progress": 100,
+                "completed_at": get_current_kst().isoformat(),
+                "total_queries": total_queries,
+                "processed_instances": processed_instances,
+                "total_instances": total_instances,
+                "period": {
+                    "start_date": format_kst(start_date),
+                    "end_date": format_kst(end_date)
+                }
+            }
+
+            await websocket_manager.update_status(
+                collection_id=collection_id,
+                status="completed",
+                details=result_details
+            )
+
+            await websocket_manager.broadcast_log(
+                collection_id=collection_id,
+                message=(
+                    f"수집 완료\n"
+                    f"- 처리된 인스턴스: {processed_instances}/{total_instances}\n"
+                    f"- 수집된 쿼리 수: {total_queries}"
+                )
             )
 
         except Exception as e:
-            logger.error(f"슬로우 쿼리 수집 중 오류 발생: {e}")
+            error_message = str(e)
+            await websocket_manager.update_status(
+                collection_id=collection_id,
+                status="error",
+                details={
+                    "error": error_message,
+                    "processed_instances": processed_instances,
+                    "total_queries": total_queries
+                }
+            )
+            await websocket_manager.broadcast_log(
+                collection_id=collection_id,
+                message=f"수집 중 오류 발생: {error_message}",
+                level="error"
+            )
             raise
 
     except Exception as e:
-        logger.error(f"수집 프로세스 초기화 중 오류 발생: {e}")
+        logger.error(f"수집 초기화 중 오류 발생: {str(e)}")
         raise
+
     finally:
-        try:
-            await MongoDBConnector.close()
-        except Exception as e:
-            logger.error(f"MongoDB 연결 종료 중 오류 발생: {e}")
+        await MongoDBConnector.close()

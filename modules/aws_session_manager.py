@@ -12,7 +12,6 @@ from botocore.exceptions import NoCredentialsError, ClientError, ProfileNotFound
 
 logger = logging.getLogger(__name__)
 
-
 class AWSSessionManager:
     """AWS Session Manager"""
     DEFAULT_PROFILE = "AdministratorAccess-488659748805"
@@ -94,8 +93,8 @@ class AWSSessionManager:
         )
 
 
-# Export the class explicitly
-__all__ = ['AWSSessionManager']
+# Export the class and instance explicitly
+__all__ = ['AWSSessionManager', 'aws_session']
 
 # Global instance
 aws_session = AWSSessionManager()
