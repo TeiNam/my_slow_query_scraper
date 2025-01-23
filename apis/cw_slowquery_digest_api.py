@@ -296,12 +296,11 @@ async def get_slow_query_stats() -> JSONResponse:
                         "instance_id": "$instance_id",
                         "digest_query": "$digest_query"
                     },
-                    # 평균값을 위한 필드들
+                    "users": {"$first": "$users"},  # users 필드를 그룹핑할 때 포함
                     "avg_lock_time": {"$avg": "$avg_lock_time"},
                     "avg_rows_examined": {"$avg": "$avg_rows_examined"},
                     "avg_rows_sent": {"$avg": "$avg_rows_sent"},
                     "avg_time": {"$avg": "$avg_time"},
-                    # 합산값을 위한 필드들
                     "total_execution_count": {"$sum": "$execution_count"},
                     "total_time": {"$sum": "$total_time"}
                 }
@@ -311,6 +310,7 @@ async def get_slow_query_stats() -> JSONResponse:
                     "_id": 0,
                     "instance_id": "$_id.instance_id",
                     "digest_query": "$_id.digest_query",
+                    "user": {"$arrayElemAt": ["$users", 0]},
                     "avg_stats": {
                         "avg_lock_time": "$avg_lock_time",
                         "avg_rows_examined": "$avg_rows_examined",
@@ -324,7 +324,6 @@ async def get_slow_query_stats() -> JSONResponse:
                 }
             },
             {
-                # 정렬 추가: execution_count 기준 내림차순
                 "$sort": {
                     "sum_stats.execution_count": -1
                 }
