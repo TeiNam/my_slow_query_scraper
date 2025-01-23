@@ -18,12 +18,13 @@ class AWSSSOSettings:
     sso_region: str
     default_region: str
     role_name: str
-
+    default_profile: str
 
 class AWSSessionConfig:
     """AWS Session 설정 관리자"""
 
     DEFAULT_REGION = 'ap-northeast-2'
+    DEFAULT_PROFILE = 'AdministratorAccess'
 
     def __init__(self):
         self._sso_settings = self._load_sso_settings()
@@ -35,7 +36,8 @@ class AWSSessionConfig:
             sso_start_url=config.get('AWS_SSO_START_URL', ''),
             sso_region=config.get('AWS_SSO_REGION', AWSSessionConfig.DEFAULT_REGION),
             default_region=config.get('AWS_DEFAULT_REGION', AWSSessionConfig.DEFAULT_REGION),
-            role_name=config.get('AWS_ROLE_NAME', 'AdministratorAccess')
+            role_name=config.get('AWS_ROLE_NAME', AWSSessionConfig.DEFAULT_PROFILE),
+            default_profile=config.get('AWS_DEFAULT_PROFILE', AWSSessionConfig.DEFAULT_PROFILE)
         )
 
     @staticmethod
