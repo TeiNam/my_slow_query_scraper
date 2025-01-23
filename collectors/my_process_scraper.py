@@ -114,7 +114,7 @@ class SlowQueryMonitor:
         try:
             time_value = float(time)
             if time_value >= EXEC_TIME:
-                logger.info(f"[CACHE] Processing slow query - PID: {pid}, Time: {time_value}s")
+                logger.info(f"[CACHE] Processing slow query - DB: {db}, PID: {pid}, Time: {time_value}s")
 
                 # 단순화된 캐시 처리
                 cache_data = self.pid_time_cache.setdefault(pid, {'max_time': 0})
@@ -140,40 +140,44 @@ class SlowQueryMonitor:
                     start=cache_data['start']
                 )
 
-                logger.info(
-                    f"[CACHE] Cached slow query - Instance: {self.mysql_connector.instance_name}, "
-                    f"PID: {pid}, DB: {db}, Time: {time_value}s"
-                )
+                #logger.info(
+                #    f"[CACHE] Cached slow query - Instance: {self.mysql_connector.instance_name}, "
+                #    f"PID: {pid}, DB: {db}, Time: {time_value}s"
+                #)
         except (ValueError, TypeError) as e:
             logger.error(f"[ERROR] Failed to process query result - PID: {pid}, Time value: {time}, Error: {e}")
 
     async def handle_finished_queries(self, current_pids: set) -> None:
-        for pid, cache_data in list(self.pid_time_cache.items()):
-            if pid not in current_pids:
-                try:
-                    data_to_insert = vars(cache_data['details'])
-                    data_to_insert['time'] = cache_data['max_time']
-                    data_to_insert['end'] = datetime.now(pytz.utc)
+        try:
+            if not mongodb._client or mongodb._db is None:
+                await mongodb.initialize()
+                db = await mongodb.get_database()
+                self.collection = db[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION]
 
-                    existing_query = await self.collection.find_one({
-                        'pid': data_to_insert['pid'],
-                        'instance': data_to_insert['instance'],
-                        'db': data_to_insert['db'],
-                        'start': data_to_insert['start']
-                    })
+            for pid, cache_data in list(self.pid_time_cache.items()):
+                if pid not in current_pids:
+                    try:
+                        data_to_insert = vars(cache_data['details'])
+                        data_to_insert['time'] = cache_data['max_time']
+                        data_to_insert['end'] = datetime.now(pytz.utc)
 
-                    if not existing_query:
-                        await self.collection.insert_one(data_to_insert)
-                        logger.info(
-                            f"Saved slow query - Instance: {self.mysql_connector.instance_name}, "
-                            f"DB: {data_to_insert['db']}, PID: {pid}, Time: {data_to_insert['time']}s"
-                        )
+                        existing_query = await self.collection.find_one({
+                            'pid': data_to_insert['pid'],
+                            'instance': data_to_insert['instance'],
+                            'db': data_to_insert['db'],
+                            'start': data_to_insert['start']
+                        })
 
-                    del self.pid_time_cache[pid]
+                        if not existing_query:
+                            await self.collection.insert_one(data_to_insert)
 
-                except Exception as e:
-                    logger.error(f"Error handling finished query - Instance: {self.mysql_connector.instance_name}, "
-                                    f"PID: {pid}, Error: {str(e)}")
+                        del self.pid_time_cache[pid]
+
+                    except Exception as e:
+                        logger.error(f"Error handling finished query - Instance: {self.mysql_connector.instance_name}, "
+                                     f"PID: {pid}, Error: {str(e)}")
+        except Exception as e:
+            logger.error(f"MongoDB connection error in handle_finished_queries: {str(e)}")
 
     async def run_mysql_slow_queries(self) -> None:
         try:
