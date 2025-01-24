@@ -9,6 +9,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+from motor.motor_asyncio import AsyncIOMotorClient
 from modules.mongodb_connector import mongodb
 from modules.mysql_connector import MySQLConnector
 from modules.load_instance import InstanceLoader
@@ -43,12 +44,11 @@ class QueryDetails:
 
 class SlowQueryMonitor:
     def __init__(self, mysql_connector: MySQLConnector):
-        self.pid_time_cache: Dict[int, Dict[str, Any]] = {}
+        self.pid_time_cache = {}
         self.mysql_connector = mysql_connector
         self._stop_event = asyncio.Event()
-        self.mongodb = None
+        self.mongodb_client = None
         self.collection = None
-        # 초기화 시점 확인을 위한 로그 추가
         logger.warning(f"Created SlowQueryMonitor instance for {mysql_connector.instance_name}")
 
     @staticmethod
@@ -68,16 +68,20 @@ class SlowQueryMonitor:
 
     async def stop(self):
         self._stop_event.set()
+        if self.mongodb_client:
+            self.mongodb_client.close()
         logger.info(f"Stopping SlowQueryMonitor for {self.mysql_connector.instance_name}")
 
     async def initialize(self):
-        db = await mongodb.get_database()
-        self.collection = db[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION]
-        # 로그 레벨을 DEBUG로 변경하여 더 자세한 정보 출력
-        logger.debug("Initializing SlowQueryMonitor...")
-        logger.info(f"Initialized SlowQueryMonitor for instance: {self.mysql_connector.instance_name}")
-        # 로그가 실제로 출력되는지 확인하기 위한 추가 로그
-        logger.warning(f"Monitor initialization complete for {self.mysql_connector.instance_name}")
+        try:
+            self.mongodb_client = AsyncIOMotorClient(mongo_settings.connection_uri)
+            self.collection = self.mongodb_client[mongo_settings.MONGODB_DB_NAME][
+                mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION]
+            logger.debug("Initializing SlowQueryMonitor...")
+            logger.info(f"Initialized SlowQueryMonitor for instance: {self.mysql_connector.instance_name}")
+        except Exception as e:
+            logger.error(f"Failed to initialize MongoDB connection: {str(e)}")
+            raise
 
     async def query_mysql_instance(self) -> None:
         try:
@@ -140,19 +144,13 @@ class SlowQueryMonitor:
                     start=cache_data['start']
                 )
 
-                #logger.info(
-                #    f"[CACHE] Cached slow query - Instance: {self.mysql_connector.instance_name}, "
-                #    f"PID: {pid}, DB: {db}, Time: {time_value}s"
-                #)
         except (ValueError, TypeError) as e:
             logger.error(f"[ERROR] Failed to process query result - PID: {pid}, Time value: {time}, Error: {e}")
 
     async def handle_finished_queries(self, current_pids: set) -> None:
         try:
-            if not mongodb._client or mongodb._db is None:
-                await mongodb.initialize()
-                db = await mongodb.get_database()
-                self.collection = db[mongo_settings.MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION]
+            if not self.mongodb_client:
+                await self.initialize()
 
             for pid, cache_data in list(self.pid_time_cache.items()):
                 if pid not in current_pids:
@@ -175,9 +173,13 @@ class SlowQueryMonitor:
 
                     except Exception as e:
                         logger.error(f"Error handling finished query - Instance: {self.mysql_connector.instance_name}, "
-                                     f"PID: {pid}, Error: {str(e)}")
+                                   f"PID: {pid}, Error: {str(e)}")
         except Exception as e:
             logger.error(f"MongoDB connection error in handle_finished_queries: {str(e)}")
+            try:
+                await self.initialize()
+            except Exception as conn_err:
+                logger.error(f"Failed to re-initialize MongoDB connection: {str(conn_err)}")
 
     async def run_mysql_slow_queries(self) -> None:
         try:
@@ -194,6 +196,7 @@ class SlowQueryMonitor:
                 f"An error occurred in slow query monitoring for {self.mysql_connector.instance_name}: {e}")
         finally:
             logger.info(f"Slow query monitoring stopped for {self.mysql_connector.instance_name}")
+
 
 monitors: List[SlowQueryMonitor] = []
 

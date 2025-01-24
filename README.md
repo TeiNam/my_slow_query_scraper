@@ -44,10 +44,10 @@ APP_SECRET_NAME=slow-query-collector-secret  # 선택: prd 환경에서만 사�
 
 # AWS 설정
 AWS_DEFAULT_REGION=ap-northeast-2  # 필수: AWS 리전
-AWS_SSO_START_URL=              # 필수: AWS SSO URL (로컬 개발 환경)
-AWS_SSO_REGION=ap-northeast-2   # 필수: AWS SSO 리전
-AWS_ROLE_NAME=AdministratorAccess  # 필수: AWS IAM 역할
-AWS_ACCOUNT_ID=                 # 선택: AWS 계정 ID
+AWS_SSO_START_URL=                 # 필수: AWS SSO URL (로컬 개발 환경)
+AWS_SSO_REGION=ap-northeast-2      # 필수: AWS SSO 리전
+AWS_ROLE_NAME=                     # 필수: AWS IAM 역할
+AWS_DEFAULT_PROFILE=               # 선택: AWS 계정 ID
 
 # MongoDB 설정
 MONGODB_URI=mongodb://localhost:27017  # 필수: MongoDB 연결 URI
