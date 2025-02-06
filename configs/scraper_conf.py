@@ -4,13 +4,13 @@ MySQL Process Scraper를 위한 설정 관리
 """
 
 from typing import Dict, Any, Set
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import logging
 from configs.base_config import config
 
 logger = logging.getLogger(__name__)
 
-@dataclass(frozen=True)
+@dataclass
 class ScraperSettings:
     """스크래퍼 설정 데이터클래스"""
     exec_time: int
@@ -18,11 +18,19 @@ class ScraperSettings:
     excluded_dbs: Set[str]
     excluded_users: Set[str]
 
+    def as_dict(self) -> Dict[str, Any]:
+        """설정을 딕셔너리로 변환"""
+        return asdict(self)
+
+    def __getitem__(self, key: str) -> Any:
+        """딕셔너리 스타일 접근 지원"""
+        return getattr(self, key)
+
 class ScraperConfigManager:
     """MySQL Process Scraper 설정 관리자"""
 
     # 기본값 정의
-    DEFAULT_EXEC_TIME = 2  # MYSQL_EXEC_TIME과 동일한 기본값 사용
+    DEFAULT_EXEC_TIME = 2
     DEFAULT_MONITORING_INTERVAL = 1
     DEFAULT_EXCLUDED_DBS = {'information_schema', 'mysql', 'performance_schema'}
     DEFAULT_EXCLUDED_USERS = {'monitor', 'rdsadmin', 'system user', 'mysql_mgmt'}
@@ -36,11 +44,7 @@ class ScraperConfigManager:
             return self.DEFAULT_EXEC_TIME
 
     def get_monitoring_interval(self) -> int:
-        """모니터링 간격(초) 조회
-
-        Returns:
-            int: 모니터링 간격 (최소 1초)
-        """
+        """모니터링 간격(초) 조회"""
         try:
             interval = int(config.get('MYSQL_MONITORING_INTERVAL', self.DEFAULT_MONITORING_INTERVAL))
             return max(1, interval)  # 최소 1초 보장
@@ -71,17 +75,15 @@ class ScraperConfigManager:
             return self.DEFAULT_EXCLUDED_USERS
 
     def get_settings(self) -> ScraperSettings:
-        """모든 스크래퍼 설정 조회
-
-        Returns:
-            ScraperSettings: 스크래퍼 설정 데이터클래스 인스턴스
-        """
-        return ScraperSettings(
+        """모든 스크래퍼 설정 조회"""
+        settings = ScraperSettings(
             exec_time=self.get_exec_time(),
             monitoring_interval=self.get_monitoring_interval(),
             excluded_dbs=self.get_excluded_databases(),
             excluded_users=self.get_excluded_users()
         )
+        logger.debug(f"Generated scraper settings: {settings.as_dict()}")
+        return settings
 
 # 전역 인스턴스
 scraper_config = ScraperConfigManager()
