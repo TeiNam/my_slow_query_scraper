@@ -17,10 +17,10 @@ class MongoSettings(BaseSettings):
     """MongoDB 설정 클래스"""
 
     # 기본 연결 설정
-    MONGODB_URI: Optional[str] = config.get("MONGODB_URI", "mongodb://localhost:27017")
-    MONGODB_DB_NAME: str = config.get("MONGODB_DB_NAME", "mgmt_mysql")
-    MONGODB_USER: Optional[str] = config.get("MONGODB_USER", "admin")
-    MONGODB_PASSWORD: Optional[str] = config.get("MONGODB_PASSWORD", "admin")
+    MONGODB_URI: Optional[str] = config.get("MONGODB_URI")
+    MONGODB_DB_NAME: str = config.get("MONGODB_DB_NAME", "mgmt_rds_mysql")
+    MONGODB_USER: Optional[str] = config.get("MONGODB_USER", "mgmt_monitor")
+    MONGODB_PASSWORD: Optional[str] = config.get("MONGODB_PASSWORD")
     MONGO_TLS: bool = config.get("MONGO_TLS", "false").lower() == "true"
 
     # 컬렉션 이름 설정
