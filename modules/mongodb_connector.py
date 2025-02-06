@@ -61,10 +61,10 @@ class MongoDBConnector:
                     "tlsAllowInvalidHostnames": True
                 })
 
-            cls._client = AsyncIOMotorClient(
-                mongo_settings.connection_uri,
-                **connection_kwargs
-            )
+            if "localhost" in mongo_settings.connection_uri:
+                raise ValueError("MONGODB_URI should not be set to localhost in Docker environment.")
+
+            cls._client = AsyncIOMotorClient(mongo_settings.connection_uri, **connection_kwargs)
             cls._db = cls._client[mongo_settings.MONGODB_DB_NAME]
             await cls._client.admin.command('ping')
             logger.info("MongoDB connection established successfully")

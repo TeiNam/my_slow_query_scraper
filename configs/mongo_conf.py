@@ -18,6 +18,8 @@ class MongoSettings(BaseSettings):
 
     # 기본 연결 설정
     MONGODB_URI: Optional[str] = config.get("MONGODB_URI")
+    if not MONGODB_URI:
+        raise ValueError("MONGODB_URI is not set. Please provide it as an environment variable.")
     MONGODB_DB_NAME: str = config.get("MONGODB_DB_NAME", "mgmt_rds_mysql")
     MONGODB_USER: Optional[str] = config.get("MONGODB_USER", "mgmt_monitor")
     MONGODB_PASSWORD: Optional[str] = config.get("MONGODB_PASSWORD")
