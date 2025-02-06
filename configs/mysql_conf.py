@@ -53,8 +53,24 @@ class MySQLConfig:
         )
 
     @classmethod
+    def get_management_settings(cls) -> MySQLSettings:
+        """관리자 계정 MySQL 설정 반환"""
+        mgmt_user = config.get('MGMT_USER')
+        mgmt_password = config.get('MGMT_USER_PASS')
+
+        if not mgmt_user or not mgmt_password:
+            raise ValueError("MGMT_USER and MGMT_USER_PASS must be set in environment variables")
+
+        return cls.create_settings(
+            host=config.get('MYSQL_HOST', 'localhost'),
+            user=mgmt_user,
+            password=mgmt_password,
+            database=config.get('MYSQL_DATABASE', 'mysql')
+        )
+
+    @classmethod
     def get_default_settings(cls) -> MySQLSettings:
-        """기본 MySQL 설정 반환"""
+        """기본 MySQL 설정 반환 (일반적인 접속용)"""
         return cls.create_settings(
             host=config.get('MYSQL_HOST', 'localhost'),
             user=config.get('MYSQL_USER', 'root'),
@@ -64,4 +80,4 @@ class MySQLConfig:
 
 # 전역 인스턴스들
 mysql_config = MySQLConfig()
-mysql_settings = mysql_config.get_default_settings()
+mysql_settings = mysql_config.get_management_settings()  # 모니터링용으로 관리자 계정 사용

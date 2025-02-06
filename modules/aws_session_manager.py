@@ -1,6 +1,7 @@
 """
 AWS Session Manager
-환경변수 -> 시크릿 매니저 -> SSO -> IAM Role 순서로 인증을 시도하여 AWS 세션을 관리
+개발 환경: SSO -> 환경변수
+운영 환경: IAM Role -> 시크릿 매니저 -> 환경변수
 """
 
 import boto3
@@ -9,6 +10,7 @@ from typing import Optional, Dict, Any
 import logging
 from configs.aws_session_conf import aws_session_config
 from botocore.exceptions import NoCredentialsError, ClientError, ProfileNotFound
+from configs.base_config import config
 
 logger = logging.getLogger(__name__)
 
@@ -21,41 +23,92 @@ class AWSSessionManager:
 
     def _initialize_session(self) -> None:
         """
-        다음 우선순위로 세션 초기화 시도:
-        1. 환경변수 credentials
-        2. 시크릿 매니저
-        3. SSO
-        4. IAM Role (EKS/EC2)
+        환경에 따른 세션 초기화:
+        개발 환경:
+            1. SSO
+            2. 환경변수 credentials
+        운영 환경:
+            1. IAM Role
+            2. 시크릿 매니저의 환경변수
+            3. .env 파일의 환경변수
         """
         try:
-            # 1. 환경변수 credentials 확인
-            if aws_session_config.settings.credentials:
-                self._initialize_with_credentials()
-                logger.info("환경변수 credentials로 세션이 초기화되었습니다.")
-                return
-
-            # 2. 시크릿 매니저 시도
-            if self._try_secret_manager_session():
-                logger.info("시크릿 매니저 credentials로 세션이 초기화되었습니다.")
-                return
-
-            # 3. SSO 설정 확인
-            if aws_session_config.settings.sso_settings and not aws_session_config.is_eks():
-                self._initialize_with_sso()
-                logger.info("SSO 프로필로 세션이 초기화되었습니다.")
-                return
-
-            # 4. IAM Role 사용 (EKS/EC2)
-            self._initialize_with_iam_role()
-            logger.info("IAM Role로 세션이 초기화되었습니다.")
+            if config.is_development():
+                self._initialize_development()
+            else:
+                self._initialize_production()
 
             # 세션 유효성 검증
-            identity = self.session.client('sts').get_caller_identity()
-            logger.info(f"AWS 세션 초기화 완료 (Account: {identity['Account']})")
+            if self.session:
+                identity = self.session.client('sts').get_caller_identity()
+                logger.info(f"AWS 세션 초기화 완료 (Account: {identity['Account']})")
+            else:
+                raise ValueError("세션 초기화 실패")
 
         except Exception as e:
             logger.error(f"AWS 세션 초기화 실패: {str(e)}")
             raise
+
+    def _initialize_production(self) -> None:
+        """운영 환경 세션 초기화"""
+        try:
+            # 1. IAM Role 시도
+            self._initialize_with_iam_role()
+            logger.info("IAM Role로 세션이 초기화되었습니다.")
+
+            # 2. 시크릿 매니저에서 환경변수 로드
+            if self._load_env_from_secrets():
+                logger.info("시크릿 매니저에서 환경변수를 로드했습니다.")
+            else:
+                logger.info("시크릿 매니저에서 환경변수를 찾을 수 없어 .env 파일의 값을 사용합니다.")
+
+        except Exception as e:
+            logger.error(f"운영 환경 세션 초기화 실패: {e}")
+            raise
+
+    def _load_env_from_secrets(self) -> bool:
+        """시크릿 매니저에서 환경변수 로드"""
+        try:
+            if not self.session:
+                return False
+
+            secrets = self.session.client('secretsmanager')
+            response = secrets.get_secret_value(SecretId='slow-query-collector-secret')
+
+            import json
+            secret = json.loads(response['SecretString'])
+
+            # 환경변수 업데이트
+            if isinstance(secret, dict):
+                for key, value in secret.items():
+                    if value is not None:
+                        os.environ[key] = str(value)
+                return True
+
+        except Exception as e:
+            logger.debug(f"시크릿 매니저에서 환경변수 로드 실패: {str(e)}")
+            return False
+
+        return False
+
+    def _initialize_development(self) -> None:
+        """개발 환경 세션 초기화"""
+        # 1. SSO 시도
+        if aws_session_config.settings.sso_settings:
+            try:
+                self._initialize_with_sso()
+                logger.info("SSO 프로필로 세션이 초기화되었습니다.")
+                return
+            except Exception as e:
+                logger.debug(f"SSO 초기화 실패: {e}")
+
+        # 2. 환경변수 credentials 시도
+        if aws_session_config.settings.credentials:
+            self._initialize_with_credentials()
+            logger.info("환경변수 credentials로 세션이 초기화되었습니다.")
+            return
+
+        raise ValueError("개발 환경에서 유효한 AWS 인증 방식을 찾을 수 없습니다.")
 
     def _initialize_with_credentials(self) -> None:
         """환경변수 credentials로 세션 초기화"""
@@ -67,33 +120,17 @@ class AWSSessionManager:
             region_name=aws_session_config.settings.region
         )
 
-    def _try_secret_manager_session(self) -> bool:
-        """시크릿 매니저에서 credentials 조회 시도"""
-        try:
-            temp_session = boto3.Session(region_name=aws_session_config.settings.region)
-            secrets = temp_session.client('secretsmanager')
-            response = secrets.get_secret_value(SecretId='dev/aws/credentials')
-
-            import json
-            secret = json.loads(response['SecretString'])
-
-            self.session = boto3.Session(
-                aws_access_key_id=secret['AWS_ACCESS_KEY_ID'],
-                aws_secret_access_key=secret['AWS_SECRET_ACCESS_KEY'],
-                aws_session_token=secret.get('AWS_SESSION_TOKEN'),
-                region_name=aws_session_config.settings.region
-            )
-            return True
-
-        except Exception as e:
-            logger.debug(f"시크릿 매니저 접근 실패: {str(e)}")
-            return False
-
     def _initialize_with_sso(self) -> None:
         """SSO 프로필로 세션 초기화"""
         sso_settings = aws_session_config.settings.sso_settings
+        if not sso_settings:
+            raise ValueError("SSO 설정이 없습니다.")
+
         available_profiles = boto3.Session().available_profiles
         logger.debug(f"사용 가능한 AWS 프로필: {', '.join(available_profiles)}")
+
+        if sso_settings.default_profile not in available_profiles:
+            raise ValueError(f"프로필을 찾을 수 없습니다: {sso_settings.default_profile}")
 
         self.session = boto3.Session(
             profile_name=sso_settings.default_profile,
