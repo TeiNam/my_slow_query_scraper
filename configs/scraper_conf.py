@@ -1,77 +1,88 @@
 """
 Scraper Configuration
-Manages configuration settings for MySQL Process Scraper
+MySQL Process Scraper를 위한 설정 관리
 """
 
 from typing import Dict, Any, Set
+from dataclasses import dataclass
 import logging
 from configs.base_config import config
 
 logger = logging.getLogger(__name__)
 
+@dataclass(frozen=True)
+class ScraperSettings:
+    """스크래퍼 설정 데이터클래스"""
+    exec_time: int
+    monitoring_interval: int
+    excluded_dbs: Set[str]
+    excluded_users: Set[str]
 
-class ScraperConfig:
-    """MySQL Process Scraper Configuration Manager"""
+class ScraperConfigManager:
+    """MySQL Process Scraper 설정 관리자"""
 
-    DEFAULT_EXEC_TIME = 2
+    # 기본값 정의
+    DEFAULT_EXEC_TIME = 2  # MYSQL_EXEC_TIME과 동일한 기본값 사용
     DEFAULT_MONITORING_INTERVAL = 1
     DEFAULT_EXCLUDED_DBS = {'information_schema', 'mysql', 'performance_schema'}
     DEFAULT_EXCLUDED_USERS = {'monitor', 'rdsadmin', 'system user', 'mysql_mgmt'}
 
-    @staticmethod
-    def get_mysql_exec_time() -> int:
-        """Get MySQL execution time threshold"""
+    def get_exec_time(self) -> int:
+        """MySQL 실행 시간 임계값 조회"""
         try:
-            exec_time = config.get('MYSQL_EXEC_TIME', ScraperConfig.DEFAULT_EXEC_TIME)
-            return int(exec_time)
+            return int(config.get('MYSQL_EXEC_TIME', self.DEFAULT_EXEC_TIME))
         except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid MYSQL_EXEC_TIME value, using default value {ScraperConfig.DEFAULT_EXEC_TIME}: {e}")
-            return ScraperConfig.DEFAULT_EXEC_TIME
+            logger.warning(f"Invalid MYSQL_EXEC_TIME value, using default value {self.DEFAULT_EXEC_TIME}: {e}")
+            return self.DEFAULT_EXEC_TIME
 
-    @staticmethod
-    def get_excluded_databases() -> Set[str]:
-        """Get list of databases to exclude from monitoring"""
+    def get_monitoring_interval(self) -> int:
+        """모니터링 간격(초) 조회
+
+        Returns:
+            int: 모니터링 간격 (최소 1초)
+        """
+        try:
+            interval = int(config.get('MYSQL_MONITORING_INTERVAL', self.DEFAULT_MONITORING_INTERVAL))
+            return max(1, interval)  # 최소 1초 보장
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid monitoring interval, using default value {self.DEFAULT_MONITORING_INTERVAL}: {e}")
+            return self.DEFAULT_MONITORING_INTERVAL
+
+    def get_excluded_databases(self) -> Set[str]:
+        """모니터링 제외 데이터베이스 목록 조회"""
         try:
             excluded_dbs = config.get('MYSQL_EXCLUDED_DBS')
             if excluded_dbs:
-                return set(excluded_dbs.split(','))
-            return ScraperConfig.DEFAULT_EXCLUDED_DBS
+                return set(item.strip() for item in excluded_dbs.split(','))
+            return self.DEFAULT_EXCLUDED_DBS
         except Exception as e:
             logger.warning(f"Error processing excluded databases, using defaults: {e}")
-            return ScraperConfig.DEFAULT_EXCLUDED_DBS
+            return self.DEFAULT_EXCLUDED_DBS
 
-    @staticmethod
-    def get_excluded_users() -> Set[str]:
-        """Get list of users to exclude from monitoring"""
+    def get_excluded_users(self) -> Set[str]:
+        """모니터링 제외 사용자 목록 조회"""
         try:
             excluded_users = config.get('MYSQL_EXCLUDED_USERS')
             if excluded_users:
-                return set(excluded_users.split(','))
-            return ScraperConfig.DEFAULT_EXCLUDED_USERS
+                return set(item.strip() for item in excluded_users.split(','))
+            return self.DEFAULT_EXCLUDED_USERS
         except Exception as e:
             logger.warning(f"Error processing excluded users, using defaults: {e}")
-            return ScraperConfig.DEFAULT_EXCLUDED_USERS
+            return self.DEFAULT_EXCLUDED_USERS
 
-    @staticmethod
-    def get_monitoring_interval() -> int:
-        """Get monitoring interval in seconds"""
-        try:
-            interval = config.get('MYSQL_MONITORING_INTERVAL', ScraperConfig.DEFAULT_MONITORING_INTERVAL)
-            return int(interval)
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid monitoring interval, using default value {ScraperConfig.DEFAULT_MONITORING_INTERVAL}: {e}")
-            return ScraperConfig.DEFAULT_MONITORING_INTERVAL
+    def get_settings(self) -> ScraperSettings:
+        """모든 스크래퍼 설정 조회
 
-    @staticmethod
-    def get_scraper_settings() -> Dict[str, Any]:
-        """Get all scraper related settings"""
-        return {
-            'exec_time': ScraperConfig.get_mysql_exec_time(),
-            'excluded_dbs': ScraperConfig.get_excluded_databases(),
-            'excluded_users': ScraperConfig.get_excluded_users(),
-            'monitoring_interval': ScraperConfig.get_monitoring_interval(),
-        }
+        Returns:
+            ScraperSettings: 스크래퍼 설정 데이터클래스 인스턴스
+        """
+        return ScraperSettings(
+            exec_time=self.get_exec_time(),
+            monitoring_interval=self.get_monitoring_interval(),
+            excluded_dbs=self.get_excluded_databases(),
+            excluded_users=self.get_excluded_users()
+        )
 
-
-# Initialize settings
-scraper_settings = ScraperConfig.get_scraper_settings()
+# 전역 인스턴스
+scraper_config = ScraperConfigManager()
+scraper_settings = scraper_config.get_settings()

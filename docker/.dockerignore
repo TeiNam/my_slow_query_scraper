@@ -1,48 +1,13 @@
-# Git
-.git
-.gitignore
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
+# .dockerignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
 .Python
 .env
-.venv
-env/
-venv/
-ENV/
-*.egg-info/
-dist/
-build/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Docker
-docker/
-Dockerfile
-docker-compose.yml
-.dockerignore
-
-# Logs
+.env.*
 *.log
-logs/
-
-# Test
-tests/
-test/
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Documentation
-docs/
-*.md
-
-# Others
-.DS_Store
+.git
+.gitignore
+README.md
+docker/
