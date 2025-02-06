@@ -8,6 +8,7 @@ from configs.mongo_conf import mongo_settings
 import logging
 from typing import Optional, Dict, Any
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,10 @@ class MongoDBConnector:
                     "tlsAllowInvalidHostnames": True
                 })
 
-            if "localhost" in mongo_settings.connection_uri:
+            # Docker 환경 체크를 명시적으로 수행
+            is_docker = os.getenv('DOCKER_ENV', 'false').lower() == 'true'
+
+            if is_docker and "localhost" in mongo_settings.connection_uri:
                 raise ValueError("MONGODB_URI should not be set to localhost in Docker environment.")
 
             cls._client = AsyncIOMotorClient(mongo_settings.connection_uri, **connection_kwargs)
