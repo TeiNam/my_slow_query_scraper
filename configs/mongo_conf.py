@@ -27,6 +27,7 @@ class MongoSettings(BaseSettings):
     MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION: str = "rds_mysql_realtime_slow_query"
     MONGO_RDS_MYSQL_SLOW_SQL_PLAN_COLLECTION: str = "rds_mysql_slow_query_explain"
     MONGO_CW_MYSQL_SLOW_SQL_COLLECTION: str = "rds_mysql_cw_slow_query"
+    MONGO_AWS_INFO_COLLECTION: str = "aws_account_info"
 
     model_config = SettingsConfigDict(
         env_prefix='',
