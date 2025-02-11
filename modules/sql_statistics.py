@@ -101,6 +101,7 @@ class SQLStatisticsCalculator:
                 read_queries = sum(1 for q in queries if self._is_read_query(q))
                 write_queries = sum(1 for q in queries if self._is_write_query(q))
                 ddl_queries = sum(1 for q in queries if self._is_ddl_query(q))
+                commit_queries = sum(1 for q in queries if self._is_commit_query(q))  # commit 쿼리 카운트 추가
 
                 stat = {
                     "instance_id": instance_id,
@@ -109,11 +110,13 @@ class SQLStatisticsCalculator:
                     "total_slow_query_count": len(queries),
                     "total_execution_count": group["total_exec_count"],
                     "total_execution_time": round(group["total_exec_time"], 2),
-                    "avg_execution_time": round(group["total_exec_time"] / group["total_exec_count"], 2) if group["total_exec_count"] > 0 else 0,
+                    "avg_execution_time": round(group["total_exec_time"] / group["total_exec_count"], 2) if group[
+                                                                                                                "total_exec_count"] > 0 else 0,
                     "total_rows_examined": int(group["total_rows_examined"]),
                     "read_query_count": read_queries,
                     "write_query_count": write_queries,
                     "ddl_query_count": ddl_queries,
+                    "commit_query_count": commit_queries,  # commit 쿼리 수 필드 추가
                     "created_at": datetime.utcnow()
                 }
                 results.append(stat)
