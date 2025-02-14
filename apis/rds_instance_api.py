@@ -19,10 +19,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="RDS Instance Collector")
+app = FastAPI(title="RDS Instance Collector", tags=["RDS Instance Collector"])
 
 
-@app.post("/collectors/rds-instances", response_model=Dict[str, Any])
+@app.post("/collectors/rds-instances", response_model=Dict[str, Any],tags=["RDS Instance Collector"])
 async def collect_rds_instances() -> Dict[str, Any]:
     """
     현재 AWS RDS의 MySQL/Aurora MySQL 인스턴스 정보를 수집하여 DB에 저장
@@ -66,7 +66,7 @@ async def collect_rds_instances() -> Dict[str, Any]:
         )
 
 
-@app.get("/rds-instances", response_model=List[Dict[str, Any]])
+@app.get("/rds-instances", response_model=List[Dict[str, Any]],tags=["RDS Instance Collector"])
 async def get_collected_instances() -> JSONResponse:
     """
     MongoDB에 저장된 RDS 인스턴스 목록을 조회

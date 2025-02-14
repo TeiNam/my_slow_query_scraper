@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CloudWatch Slow Query Digest")
+app = FastAPI(title="CloudWatch Slow Query Digest", tags=["CloudWatch Slow Query Digest"])
 
 
 async def get_previous_month_range() -> tuple[datetime, datetime]:
@@ -30,7 +30,7 @@ async def get_previous_month_range() -> tuple[datetime, datetime]:
 
     return first_day, last_day
 
-@app.get("/cw-slowquery/digest/stats", response_model=Dict[str, Any])
+@app.get("/cw-slowquery/digest/stats", response_model=Dict[str, Any],tags=["CloudWatch Slow Query Digest"])
 async def get_slow_query_stats() -> JSONResponse:
     """
     인스턴스별, 쿼리 다이제스트별 슬로우 쿼리 통계를 조회합니다.

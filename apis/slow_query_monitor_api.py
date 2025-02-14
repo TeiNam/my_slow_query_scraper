@@ -86,7 +86,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="MySQL Slow Query Monitor",
-    lifespan=lifespan
+    lifespan=lifespan,
+    tags=["MySQL Slow Query Monitor"],
 )
 
 
@@ -109,7 +110,7 @@ async def run_all_monitors():
             await monitor.stop()
         await MongoDBConnector.close()
 
-@app.post("/mysql/start", response_model=MonitorResponse)
+@app.post("/mysql/start", response_model=MonitorResponse,tags=["MySQL Slow Query Monitor"])
 async def start_monitoring():
     """Start monitoring for all instances"""
     global monitor_running, monitoring_task, monitors
@@ -134,7 +135,7 @@ async def start_monitoring():
         logger.error(f"Error starting monitoring: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/mysql/stop", response_model=MonitorResponse)
+@app.post("/mysql/stop", response_model=MonitorResponse,tags=["MySQL Slow Query Monitor"])
 async def stop_monitoring():
     """Stop monitoring for all instances"""
     global monitor_running, monitoring_task, monitors
@@ -167,7 +168,7 @@ async def stop_monitoring():
         logger.error(f"Error stopping monitoring: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/mysql/status", response_model=MonitorResponse)
+@app.get("/mysql/status", response_model=MonitorResponse,tags=["MySQL Slow Query Monitor"])
 async def get_monitor_status():
     """Get monitoring status"""
     return MonitorResponse(
@@ -177,7 +178,7 @@ async def get_monitor_status():
     )
 
 
-@app.post("/mysql/explain/{pid}", response_model=ExplainResponse)
+@app.post("/mysql/explain/{pid}", response_model=ExplainResponse, tags=["MySQL Slow Query Monitor"])
 async def collect_query_explain(pid: int, background_tasks: BackgroundTasks):
     """Collect execution plan for a specific slow query PID"""
     try:
@@ -236,7 +237,7 @@ async def collect_query_explain(pid: int, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/mysql/explain/{pid}/markdown")
+@app.get("/mysql/explain/{pid}/markdown", response_model=ExplainResponse, tags=["MySQL Slow Query Monitor"])
 async def get_explain_markdown(pid: int):
     """Get explain data as markdown file"""
     try:
@@ -300,7 +301,7 @@ async def get_explain_markdown(pid: int):
         logger.error(f"Error generating markdown for PID {pid}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/mysql/queries", response_model=SlowQueryResponse)
+@app.get("/mysql/queries", response_model=SlowQueryResponse, tags=["MySQL Slow Query Monitor"])
 async def get_slow_queries(
         page: int = Query(1, gt=0, description="페이지 번호"),
         page_size: int = Query(20, gt=0, le=100, description="페이지당 항목 수"),
@@ -357,7 +358,7 @@ async def get_slow_queries(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/explain/plans", response_model=ExplainPlanResponse)
+@app.get("/explain/plans", response_model=ExplainPlanResponse, tags=["MySQL Slow Query Monitor"])
 async def get_explain_plans(
        page: int = Query(1, gt=0, description="페이지 번호"),
        page_size: int = Query(20, gt=0, le=100, description="페이지당 항목 수"),

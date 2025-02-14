@@ -17,11 +17,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="AWS Account & Region Info")
+app = FastAPI(title="AWS Account & Region Info", tags=["AWS Info"])
 
 AWS_INFO_COLLECTION = mongo_settings.MONGO_AWS_INFO_COLLECTION
 
-@app.post("/aws/collect", response_model=Dict[str, str])
+@app.post("/aws/collect", response_model=Dict[str, str],tags=["AWS Info"])
 async def collect_aws_info() -> Dict[str, str]:
    """
    현재 AWS 계정 정보를 수집하여 MongoDB에 저장
@@ -54,7 +54,7 @@ async def collect_aws_info() -> Dict[str, str]:
            detail=f"AWS 정보 수집에 실패했습니다: {str(e)}"
        )
 
-@app.get("/aws/info", response_model=Dict[str, str])
+@app.get("/aws/info", response_model=Dict[str, str], tags=["AWS Info"])
 async def get_aws_info() -> Dict[str, str]:
    """
    저장된 AWS 계정 정보 조회

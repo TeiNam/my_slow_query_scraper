@@ -28,7 +28,7 @@ class CollectionResponse(BaseModel):
     timestamp: datetime
     collection_id: str
 
-app = FastAPI(title="CloudWatch Slow Query Collector")
+app = FastAPI(title="CloudWatch Slow Query Collector", tags=["CloudWatch Slow Query Collector"])
 
 def get_last_month_range() -> Tuple[datetime, datetime]:
     """전월의 시작일과 종료일 계산 (KST 기준)"""
@@ -56,7 +56,7 @@ async def websocket_endpoint(websocket: WebSocket, collection_id: str):
         await websocket_manager.disconnect(websocket, collection_id)
 
 
-@app.post("/cloudwatch/run", response_model=CollectionResponse)
+@app.post("/cloudwatch/run", response_model=CollectionResponse,tags=["CloudWatch Slow Query Collector"])
 async def run_last_month_collection(
         background_tasks: BackgroundTasks
 ) -> CollectionResponse:
