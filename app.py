@@ -97,7 +97,6 @@ class QueryCollectorApp:
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=[
-                "https://mgmt.sql.devops.torder.tech",  # 프론트엔드 도메인
                 "http://localhost:5173",  # 개발 환경
             ],
             allow_credentials=True,
