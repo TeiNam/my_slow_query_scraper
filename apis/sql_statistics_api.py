@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SQL Statistics API", tags=["SQL Statistics"])
 
-@app.post("/sql/statistics/calculate/{year_month}", response_model=Dict[str, Any],tags=["SQL Statistics"])
+@app.post("/sql/statistics/calculate/{year_month}",response_model=List[Dict[str, Any]], tags=["SQL Statistics"])
 async def calculate_statistics(year_month: str) -> Dict[str, Any]:
     """월간 SQL 통계 계산 및 저장"""
     try:
@@ -46,7 +46,7 @@ async def calculate_statistics(year_month: str) -> Dict[str, Any]:
             detail=f"통계 계산 실패: {str(e)}"
         )
 
-@app.get("/sql/statistics/{year_month}", response_model=Dict[str, Any],tags=["SQL Statistics"])
+@app.get("/sql/statistics/{year_month}",response_model=List[Dict[str, Any]], tags=["SQL Statistics"])
 async def get_statistics(
     year_month: str,
     instance_ids: Optional[List[str]] = Query(None, description="RDS 인스턴스 ID 목록")
@@ -98,7 +98,7 @@ async def get_statistics(
         )
 
 
-@app.post("/sql/statistics/users/calculate/{year_month}", response_model=Dict[str, Any],tags=["SQL Statistics"])
+@app.post("/sql/statistics/users/calculate/{year_month}",response_model=List[Dict[str, Any]], tags=["SQL Statistics"])
 async def calculate_user_statistics(year_month: str) -> Dict[str, Any]:
     """월간 사용자별 SQL 통계 계산 및 저장"""
     try:

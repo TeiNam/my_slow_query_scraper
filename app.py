@@ -55,7 +55,6 @@ class APIManager:
         self._base_path = Path(__file__).parent / 'apis'
 
     async def discover_apis(self) -> None:
-        """apis 디렉토리에서 API 모듈을 자동으로 발견하고 로드"""
         if not self._base_path.exists():
             logger.error(f"APIs directory not found: {self._base_path}")
             return
@@ -71,16 +70,8 @@ class APIManager:
                 # FastAPI 앱 찾기
                 for attr_name, attr_value in module.__dict__.items():
                     if isinstance(attr_value, FastAPI):
-                        # API 경로 수정
-                        router = APIRouter(prefix="/api/v1")
-                        for route in attr_value.routes:
-                            router.routes.append(route)
-
-                        # 새로운 FastAPI 앱 생성
-                        new_app = FastAPI()
-                        new_app.include_router(router)
-
-                        self.apis[api_file.stem] = new_app
+                        # 프리픽스 추가하지 않고 직접 라우트 사용
+                        self.apis[api_file.stem] = attr_value
                         logger.info(f"Loaded API: {api_file.stem}")
                         break
 
@@ -105,10 +96,13 @@ class QueryCollectorApp:
         # CORS 미들웨어 추가
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],  # List[str]
-            allow_credentials=True,  # bool
-            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # List[str]
-            allow_headers=["*"],  # List[str]
+            allow_origins=[
+                "https://mgmt.sql.devops.torder.tech",  # 프론트엔드 도메인
+                "http://localhost:5173",  # 개발 환경
+            ],
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
         )
 
     @asynccontextmanager
