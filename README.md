@@ -1,8 +1,14 @@
-# MySQL Slow Query Collector
+# MySQL SlowQuery Monitoring System
 
-AWS RDS MySQL/Aurora MySQL 데이터베이스의 슬로우 쿼리를 실시간으로 모니터링하고 수집하는 도구입니다. 실시간 모니터링과 CloudWatch 로그 기반의 수집을 모두 지원하며, WebSocket을 통한 실시간 모니터링 상태 확인이 가능합니다.
+## 개요
 
-## 특징
+### 제작 배경
+- MySQL은 Oracle의 AWR Report처럼 뭔가 성능 분석을 위한 자동화된 도구가 별로 없다.
+- 데이터독은 MySQL에 프로시저를 설치하며 실행되는 모든 SQL에 대해 트리거 방식으로 프로시저를 돌려 MySQL의 자체 부하를 발생을 발생시키고, 불필요한 SQL의 플랜에 저장하기도 한다.
+- 필요한 슬로우 쿼리에 대해서만 성능 고도화 및 최적화 작업을 진행 할 수 있다.
+- 월간 슬로우 쿼리에 대한 통계를 내고 싶다.
+
+### 특징
 
 - 실시간 슬로우 쿼리 모니터링
 - CloudWatch 로그 기반 슬로우 쿼리 수집
@@ -11,148 +17,101 @@ AWS RDS MySQL/Aurora MySQL 데이터베이스의 슬로우 쿼리를 실시간�
 - Docker 컨테이너 지원
 - AWS SSO 및 IAM Role 기반 인증 지원
 
-## 시스템 요구사항
+### 시스템 요구사항
 
-- Python 3.7 이상
-- MongoDB 4.0 이상
+- Python 3.13 이상
+- MongoDB 4.4 이상
 - AWS 계정 및 적절한 IAM 권한
-- RDS MySQL/Aurora MySQL 인스턴스
+- 코드가 설치될 EC2 혹은 EKS
 
-## 설치 방법
+## 소개
 
-### Docker를 사용한 설치
+### 쿼리 수집
+- 실시간으로 슬로우쿼리를 캡쳐하여 DB에 저장하고, 플랜을 같이 저장하여 해당 쿼리가 어떻게 동작하는지 확인 할 수 있다.
+- 쿼리 정규화 및 다이제스트 생성
+  - 문자열 및 숫자 리터럴 파라미터화
+  - 주석 및 힌트 제거
+- 쿼리 유형 분류
+  - READ 쿼리 (SELECT, SHOW, DESCRIBE, EXPLAIN)
+  - WRITE 쿼리 (INSERT, UPDATE, DELETE, REPLACE, UPSERT)
+  - DDL 쿼리 (CREATE, ALTER, DROP, TRUNCATE, RENAME)
+  - 트랜잭션 쿼리 (COMMIT, ROLLBACK, BEGIN, START TRANSACTION)
 
-1. 프로젝트 클론
+### 쿼리 플랜 시각화
+- JSON 형식 실행 계획 수집
+- TREE 형식 실행 계획 수집
+- 실행 계획 마크다운 변환
+- 웹에서 직접 시각화하여 보기 쉽게 변환
+
+### CloudWatch 로그 수집
+- 웹을 통해서는 전월 데이터만 수집할 수 있다.
+- 매월 써야하는 보고서 쓰는게 귀찮았다.
+- 코드를 통해서는 특정 기간 수집하는것도 가능하다.
 ```bash
-git clone [repository-url]
-cd my_slow_queries
+# 특정 기간의 CloudWatch 로그 수집
+python collectors/cloudwatch_slowquery_collector.py --start-date YYYY-MM-DD --end-date YYYY-MM-DD
+
+# 특정 인스턴스의 로그만 수집
+python collectors/cloudwatch_slowquery_collector.py --instance-id <instance_id>
 ```
 
-2. 환경 변수 설정
-```bash
-cp .env.example .env
-# .env 파일을 편집하여 필요한 설정 입력
-```
+### 병렬 처리
+- CloudWatch 로그 수집 시 인스턴스별 병렬 처리
+- 실행 계획 수집 시 동시 처리 제한
+- MongoDB 벌크 작업 최적화
 
-3. Docker 컨테이너 실행
-```bash
-# 프로젝트 루트 디렉토리에서
-docker build -f docker/Dockerfile -t my-slow-queries .
-docker-compose -f docker/docker-compose.yml up -d
-```
 
-### 로컬 환경 설치
-
-1. 의존성 설치
-```bash
-pip install -r requirements.txt
-```
-
-2. 환경 변수 설정 후 실행
-```bash
-python app.py
-```
-
-## API 엔드포인트
-
-### 실시간 모니터링 API
-- `POST /mysql/start` - 실시간 모니터링 시작
-- `POST /mysql/stop` - 실시간 모니터링 중지
-- `GET /mysql/status` - 모니터링 상태 확인
-- `GET /mysql/queries` - 수집된 슬로우 쿼리 조회
-- `POST /mysql/explain/{pid}` - 특정 쿼리의 실행 계획 수집
-- `GET /mysql/explain/{pid}/markdown` - 실행 계획 마크다운 형식으로 다운로드
-
-### CloudWatch 수집 API
-- `POST /cloudwatch/run` - CloudWatch 로그 수집 시작
-- `GET /cloudwatch/queries` - CloudWatch 수집 쿼리 조회
-- `GET /cw-slowquery/digest/stats` - CloudWatch 수집 통계 조회
-
-### RDS 인스턴스 관리 API
-- `POST /collectors/rds-instances` - RDS 인스턴스 정보 수집
-- `GET /rds-instances` - 수집된 RDS 인스턴스 목록 조회
-
-### WebSocket 엔드포인트
-- `ws://[host]/ws/collection/{collection_id}` - 실시간 수집 상태 모니터링
-
-## 설정 옵션
+## 설치 (backend)
 
 ### 필수 환경 변수
 ```env
 # 애플리케이션 설정
-APP_ENV=dev                    # 환경 설정 (dev/prd)
-APP_SECRET_NAME=               # AWS Secrets Manager 시크릿 이름 (선택)
+APP_ENV=dev                          # 환경 설정 (dev/prd)
+APP_SECRET_NAME=                     # AWS Secrets Manager 시크릿 이름 (선택)
 
 # AWS 설정
-AWS_DEFAULT_REGION=            # AWS 리전
-AWS_SSO_START_URL=            # AWS SSO URL (개발 환경)
-AWS_ROLE_NAME=                # AWS IAM 역할
+AWS_DEFAULT_REGION=                  # AWS 리전
+AWS_SSO_START_URL=                   # AWS SSO URL (개발 환경)
+AWS_ROLE_NAME=                       # AWS IAM 역할
 
 # MongoDB 설정
-MONGODB_URI=                  # MongoDB 연결 URI
-MONGODB_DB_NAME=              # 데이터베이스 이름
-MONGO_TLS=false              # TLS 사용 여부
+MONGODB_URI=                         # MongoDB 연결 URI
+MONGODB_DB_NAME=                     # 데이터베이스 이름
+MONGO_TLS=false                      # TLS 사용 여부
 
 # MySQL 설정
-MYSQL_EXEC_TIME=2            # 슬로우 쿼리 기준 시간(초)
-MGMT_USER=                   # MySQL 관리자 계정
-MGMT_USER_PASS=              # MySQL 관리자 비밀번호
+MYSQL_EXEC_TIME=2                    # 슬로우 쿼리 기준 시간(초)
+MGMT_USER=                           # MySQL 관리자 계정
+MGMT_USER_PASS=                      # MySQL 관리자 비밀번호
 ```
 
 ### 선택적 환경 변수
 ```env
 # MySQL 모니터링 설정
-MYSQL_MONITORING_INTERVAL=1   # 모니터링 간격(초)
-MYSQL_EXCLUDED_DBS=          # 모니터링 제외 데이터베이스
-MYSQL_EXCLUDED_USERS=        # 모니터링 제외 사용자
+MYSQL_MONITORING_INTERVAL=1          # 모니터링 간격(초)
+MYSQL_EXCLUDED_DBS=                  # 모니터링 제외 데이터베이스
+MYSQL_EXCLUDED_USERS=                # 모니터링 제외 사용자
 
 # MongoDB 컬렉션 설정
 MONGO_RDS_INSTANCE_COLLECTION=       # RDS 인스턴스 정보 컬렉션
 MONGO_RDS_MYSQL_SLOW_SQL_COLLECTION= # 실시간 슬로우 쿼리 컬렉션
 ```
 
-## 데이터 구조
-
-### MongoDB 컬렉션
-
-1. RDS 인스턴스 정보 (`rds_mysql_instance`)
-```javascript
-{
-    "instance_name": String,      // RDS 인스턴스 식별자
-    "host": String,              // 엔드포인트
-    "port": Number,              // 포트
-    "region": String,            // AWS 리전
-    "tags": Object               // 인스턴스 태그
-}
+### MySQL 모니터링 유저 생성
+- 모니터링 대상 DB에 생성하는 계정
+- 환경 변수 MGMT_USER에 맵핑한다.
+```sql
+CREATE USER 'mgmt_mysql' identified by '<PASSWORD>';
+GRANT SELECT, PROCESS, SHOW VIEW ON *.* TO `mgmt_mysql`@`%`;
+GRANT SELECT ON `performance_schema`.* TO `mgmt_mysql`@`%`;
+```
+### AWS RDS 태그설정
+```
+env = prd                   # 운영 레벨 수집 설정
+real_time_slow_sql = true   # 실시간 슬로우 쿼리 수집 여부
 ```
 
-2. 실시간 슬로우 쿼리 (`rds_mysql_realtime_slow_query`)
-```javascript
-{
-    "pid": Number,               // 프로세스 ID
-    "instance": String,          // 인스턴스 이름
-    "db": String,               // 데이터베이스
-    "user": String,             // 사용자
-    "time": Number,             // 실행 시간
-    "sql_text": String,         // SQL 쿼리
-    "start": Date,              // 시작 시간
-    "end": Date                 // 종료 시간
-}
-```
-
-3. 실행 계획 (`rds_mysql_slow_query_explain`)
-```javascript
-{
-    "pid": Number,              // 프로세스 ID
-    "instance": String,         // 인스턴스 이름
-    "explain_result": {         // 실행 계획 결과
-        "json": Object,         // JSON 형식 실행 계획
-        "tree": String         // TREE 형식 실행 계획
-    }
-}
-```
-
-IAM 설정
+### IAM 설정
 
 ```bash
 # 1️⃣ IAM 역할 생성
@@ -205,12 +164,6 @@ aws ec2 associate-iam-instance-profile \
 --iam-instance-profile Name="${EC2_INSTANCE_PROFILE_NAME}"
 ```
 
-## 모니터링 및 알림
-
-- WebSocket을 통한 실시간 수집 상태 모니터링
-- 수집 진행률 및 오류 실시간 확인
-- 수집 완료 시 자동 알림
-
 ## 보안 고려사항
 
 1. AWS 인증
@@ -226,6 +179,20 @@ aws ec2 associate-iam-instance-profile \
    - TLS 연결 지원
    - 인증 필수 적용
    - 접근 제어 설정
+
+
+## 성능 최적화
+
+### MongoDB 인덱스
+```javascript
+// 슬로우 쿼리 컬렉션 인덱스
+db.rds_mysql_realtime_slow_query.createIndex({ "instance": 1, "start": -1 })
+db.rds_mysql_realtime_slow_query.createIndex({ "pid": 1 }, { unique: true })
+
+// CloudWatch 통계 컬렉션 인덱스
+db.cw_mysql_slow_sql.createIndex({ "date": 1, "instance_id": 1 })
+db.cw_mysql_slow_sql.createIndex({ "digest_query": 1 })
+```
 
 ## 트러블슈팅
 
@@ -255,12 +222,4 @@ docker logs mongodb
 ## 라이선스
 
 이 프로젝트는 MIT 라이선스를 따릅니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
-
-## 기여하기
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
 
