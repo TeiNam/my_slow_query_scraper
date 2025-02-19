@@ -70,7 +70,7 @@ class APIManager:
                 # FastAPI 앱 찾기
                 for attr_name, attr_value in module.__dict__.items():
                     if isinstance(attr_value, FastAPI):
-                        # 프리픽스 추가하지 않고 직접 라우트 사용
+                        # 프리픽스 없이 직접 FastAPI 앱 사용
                         self.apis[api_file.stem] = attr_value
                         logger.info(f"Loaded API: {api_file.stem}")
                         break
@@ -97,7 +97,7 @@ class QueryCollectorApp:
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=[
-                "http://localhost:5173",  # 개발 환경
+                "*"  # 개발 환경
             ],
             allow_credentials=True,
             allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
