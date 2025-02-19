@@ -115,16 +115,9 @@ async def calculate_statistics(year_month: str) -> Dict[str, Any]:
 
 @app.get("/sql/statistics/{year_month}", response_model=List[Dict[str, Any]], tags=["SQL Statistics"])
 async def get_statistics(
-        year_month: str,
-        instance_ids: Optional[List[str]] = Query(None, description="RDS 인스턴스 ID 목록")
+    year_month: str,
+    instance_ids: Optional[List[str]] = Query(None, description="RDS 인스턴스 ID 목록")
 ) -> List[Dict[str, Any]]:
-    """
-    월간 SQL 통계 조회
-
-    Args:
-        year_month: YYYY-MM 형식의 년월
-        instance_ids: 선택적 인스턴스 ID 목록
-    """
     try:
         # 년월 형식 검증
         try:
@@ -153,14 +146,8 @@ async def get_statistics(
                 detail=f"{year_month} 통계를 찾을 수 없습니다. 먼저 /sql/statistics/calculate/{year_month}를 실행하세요."
             )
 
-        return Response(
-            content=jsonable_encoder(stats),
-            media_type="application/json",
-            headers={
-                "Access-Control-Allow-Origin": "https://mgmt.sql.devops.torder.tech",
-                "Access-Control-Allow-Credentials": "true",
-            }
-        )
+        # Response 객체 대신 직접 List 반환
+        return stats
 
     except HTTPException:
         raise
@@ -179,18 +166,11 @@ async def calculate_user_statistics(year_month: str) -> Dict[str, Any]:
         calculator = SQLStatisticsCalculator()
         stats = await calculator.calculate_user_statistics(year_month)
 
-        return Response(
-            content=jsonable_encoder({
-                "status": "success",
-                "message": f"{year_month} 사용자별 통계 계산 완료",
-                "count": len(stats)
-            }),
-            media_type="application/json",
-            headers={
-                "Access-Control-Allow-Origin": "https://mgmt.sql.devops.torder.tech",
-                "Access-Control-Allow-Credentials": "true",
-            }
-        )
+        return {
+            "status": "success",
+            "message": f"{year_month} 사용자별 통계 계산 완료",
+            "count": len(stats)
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -225,14 +205,7 @@ async def get_user_statistics(
                 detail=f"{year_month} 사용자별 통계를 찾을 수 없습니다."
             )
 
-        return Response(
-            content=jsonable_encoder(stats),
-            media_type="application/json",
-            headers={
-                "Access-Control-Allow-Origin": "https://mgmt.sql.devops.torder.tech",
-                "Access-Control-Allow-Credentials": "true",
-            }
-        )
+        return stats
 
     except Exception as e:
         raise HTTPException(
