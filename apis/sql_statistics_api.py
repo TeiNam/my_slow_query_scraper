@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SQL Statistics API", tags=["SQL Statistics"])
 
-@app.post("/sql/statistics/calculate/{year_month}",response_model=List[Dict[str, Any]], tags=["SQL Statistics"])
+@app.post("/sql/statistics/calculate/{year_month}", response_model=Dict[str, Any], tags=["SQL Statistics"])
 async def calculate_statistics(year_month: str) -> Dict[str, Any]:
     """월간 SQL 통계 계산 및 저장"""
     try:
