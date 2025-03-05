@@ -127,6 +127,25 @@ class RDSCloudWatchSlowQueryCollector:
                         )
 
                         if events := events_response.get('events'):
+                            # 인코딩 문제 해결을 위한 코드 추가
+                            for event in events:
+                                if 'message' in event:
+                                    # 명시적으로 UTF-8로 처리
+                                    try:
+                                        # AWS API가 반환하는 기본 인코딩을 이용해 바이트로 변환
+                                        message_bytes = event['message'].encode('latin1')
+                                        # UTF-8로 올바르게 디코딩
+                                        event['message'] = message_bytes.decode('utf-8', errors='replace')
+
+                                        # 디버깅을 위한 로그 (한글이 포함된 경우에만)
+                                        if any(ord(c) > 127 for c in event['message']):
+                                            logger.debug(f"한글 메시지 처리: {event['message'][:50]}...")
+                                    except UnicodeError as ue:
+                                        logger.warning(f"로그 메시지 디코딩 실패: {event['message'][:30]}... 오류: {ue}")
+                                        # 실패 시 대체 문자로 디코딩
+                                        event['message'] = event['message'].encode('latin1', errors='replace').decode(
+                                            'utf-8', errors='replace')
+
                             stream_events.extend(events)
 
                         next_token = events_response.get('nextForwardToken')
@@ -457,8 +476,8 @@ class RDSCloudWatchSlowQueryCollector:
                         "date": target_date.strftime('%Y-%m-%d'),
                         "instance_id": instance_id,
                         "created_at": datetime.now(kst).isoformat(),
-                        "digest_query": query_data['digest_query'],
-                        "example_queries": query_data['example_queries'],
+                        "digest_query": query_data['digest_query'].encode('utf-8').decode('utf-8'),
+                        "example_queries": [q.encode('utf-8').decode('utf-8') for q in query_data['example_queries']],
                         "execution_count": query_data['execution_count'],
                         "avg_time": query_data['avg_time'],
                         "total_time": query_data['total_time'],

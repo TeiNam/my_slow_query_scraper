@@ -5,6 +5,7 @@ SQL 통계 정보 제공 API
 
 import logging
 from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from typing import List, Dict, Any, Optional
 from modules.mongodb_connector import mongodb
@@ -90,13 +91,13 @@ async def calculate_statistics(year_month: str) -> Dict[str, Any]:
         calculator = SQLStatisticsCalculator()
         stats = await calculator.calculate_monthly_statistics(year_month)
 
-        return Response(
-            content=jsonable_encoder({
+        # JSONResponse 사용하기
+        return JSONResponse(
+            content={
                 "status": "success",
                 "message": f"{year_month} 통계 계산 완료",
                 "count": len(stats)
-            }),
-            media_type="application/json",
+            },
             headers={
                 "Access-Control-Allow-Origin": "https://mgmt.sql.devops.torder.tech",
                 "Access-Control-Allow-Credentials": "true",

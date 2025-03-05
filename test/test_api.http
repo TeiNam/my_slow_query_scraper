@@ -70,7 +70,7 @@ Content-Type: application/json
 }
 
 ### 슬로우 쿼리 조회 (기본)
-GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01
+GET http://localhost:8000/api/v1/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01
 
 ### 슬로우 쿼리 조회 (특정 인스턴스)
 GET http://localhost:8000/cloudwatch/queries?start_date=2025-01-01&end_date=2025-01-01&instance_id=your-instance-id
