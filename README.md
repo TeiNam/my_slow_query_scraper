@@ -138,8 +138,40 @@ IAM_POLICY_NAME=rds_slow_monitor
 # 정책 JSON 다운로드
 curl --fail --silent --write-out "Response code: %{response_code}\n" https://raw.githubusercontent.com/qonto/prometheus-rds-exporter/main/configs/aws/policy.json -o rds-slow-monitor.policy.json
 
+# 필요한 RDS 및 CloudWatch Logs 권한 추가
+cat > rds-logs-permissions.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "rds:DescribeDBInstances",
+                "rds:DescribeDBClusters",
+                "rds:DescribeDBLogFiles",
+                "rds:ListTagsForResource",
+                "iam:ListAccountAliases",
+                "logs:DescribeLogGroups",
+                "logs:DescribeLogStreams",
+                "logs:GetLogEvents",
+                "logs:FilterLogEvents"
+            ],
+            "Resource": [
+                "arn:aws:rds:*:*:db:*",
+                "arn:aws:rds:*:*:cluster:*",
+                "arn:aws:logs:*:*:log-group:/aws/rds/instance/*",
+                "arn:aws:logs:*:*:log-group:/aws/rds/instance/*/log-stream:*"
+            ]
+        }
+    ]
+}
+EOF
+
+# 기존 정책과 새 권한을 병합
+jq -s '.[0].Statement += .[1].Statement | .[0]' rds-slow-monitor.policy.json rds-logs-permissions.json > combined-policy.json
+
 # IAM 정책 생성
-aws iam create-policy --policy-name ${IAM_POLICY_NAME} --policy-document file://rds-slow-monitor.policy.json
+aws iam create-policy --policy-name ${IAM_POLICY_NAME} --policy-document file://combined-policy.json
 
 # 정책 ARN 생성 및 역할에 정책 연결
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
